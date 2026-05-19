@@ -13,17 +13,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/transfer")
-@CrossOrigin(origins = "http://localhost:5173", exposedHeaders = {
-    "Content-Disposition",
-    "Content-Type",
-    "Content-Length"
-})
 public class TransferController {
 
     @Autowired
@@ -31,7 +27,8 @@ public class TransferController {
 
     @PostMapping("/create")
     public ResponseEntity<?> create(@RequestBody(required = false) Map<String, Object> request,
-                                    @AuthenticationPrincipal User user) {
+                                    @AuthenticationPrincipal User user,
+                                    HttpServletRequest servletRequest) {
         try {
             requireAuthenticatedUser(user);
             Integer maxDownloads = request != null && request.get("max_downloads") != null
@@ -40,9 +37,10 @@ public class TransferController {
             Integer expiryMinutes = request != null && request.get("expiry_minutes") != null
                 ? toInteger(request.get("expiry_minutes"), "expiry_minutes")
                     : null;
-            String clientBaseUrl = request != null && request.get("client_base_url") != null
-                    ? request.get("client_base_url").toString()
-                    : null;
+            String clientBaseUrl = resolveClientBaseUrl(
+                    request != null ? request.get("client_base_url") : null,
+                    servletRequest
+            );
 
             return ResponseEntity.ok(success(transferService.createSession(maxDownloads, expiryMinutes, clientBaseUrl, user.getId())));
         } catch (TransferServiceException ex) {
@@ -52,7 +50,8 @@ public class TransferController {
 
     @PostMapping("/create-from-file")
     public ResponseEntity<?> createFromFile(@RequestBody(required = false) Map<String, Object> request,
-                                            @AuthenticationPrincipal User user) {
+                            @AuthenticationPrincipal User user,
+                            HttpServletRequest servletRequest) {
         try {
             requireAuthenticatedUser(user);
             String fileId = request != null && request.get("file_id") != null ? request.get("file_id").toString() : null;
@@ -62,9 +61,10 @@ public class TransferController {
             Integer expiryMinutes = request != null && request.get("expiry_minutes") != null
                     ? toInteger(request.get("expiry_minutes"), "expiry_minutes")
                     : null;
-            String clientBaseUrl = request != null && request.get("client_base_url") != null
-                    ? request.get("client_base_url").toString()
-                    : null;
+            String clientBaseUrl = resolveClientBaseUrl(
+                request != null ? request.get("client_base_url") : null,
+                servletRequest
+            );
 
             return ResponseEntity.ok(success(transferService.createSessionFromExistingFile(
                     fileId,
@@ -80,10 +80,12 @@ public class TransferController {
 
     @GetMapping("/my-sessions")
     public ResponseEntity<?> mySessions(@RequestParam(value = "client_base_url", required = false) String clientBaseUrl,
-                                        @AuthenticationPrincipal User user) {
+                                        @AuthenticationPrincipal User user,
+                                        HttpServletRequest servletRequest) {
         try {
             requireAuthenticatedUser(user);
-            return ResponseEntity.ok(success(transferService.getMyActiveSessions(user.getId(), clientBaseUrl)));
+            String resolvedBaseUrl = resolveClientBaseUrl(clientBaseUrl, servletRequest);
+            return ResponseEntity.ok(success(transferService.getMyActiveSessions(user.getId(), resolvedBaseUrl)));
         } catch (TransferServiceException ex) {
             return ResponseEntity.status(ex.getStatus()).body(error(ex.getMessage()));
         }
@@ -116,15 +118,61 @@ public class TransferController {
 
     @PostMapping("/complete-upload")
     public ResponseEntity<?> completeUpload(@RequestBody Map<String, Object> request,
-                                            @AuthenticationPrincipal User user) {
+                                            @AuthenticationPrincipal User user,
+                                            HttpServletRequest servletRequest) {
         try {
             requireAuthenticatedUser(user);
             String sessionId = request.get("session_id") == null ? null : request.get("session_id").toString();
             String fileKey = request.get("file_key") == null ? null : request.get("file_key").toString();
-            String clientBaseUrl = request.get("client_base_url") == null ? null : request.get("client_base_url").toString();
+            String clientBaseUrl = resolveClientBaseUrl(request.get("client_base_url"), servletRequest);
             return ResponseEntity.ok(success(transferService.markUploadComplete(sessionId, fileKey, clientBaseUrl, user.getId())));
         } catch (TransferServiceException ex) {
             return ResponseEntity.status(ex.getStatus()).body(error(ex.getMessage()));
+        }
+    }
+
+    private String resolveClientBaseUrl(Object explicitBaseUrl, HttpServletRequest servletRequest) {
+        String explicit = explicitBaseUrl == null ? null : explicitBaseUrl.toString();
+        String fromExplicit = normalizeBaseUrl(explicit);
+        if (fromExplicit != null) {
+            return fromExplicit;
+        }
+
+        if (servletRequest == null) {
+            return null;
+        }
+
+        String origin = normalizeBaseUrl(servletRequest.getHeader("Origin"));
+        if (origin != null) {
+            return origin;
+        }
+
+        String referer = servletRequest.getHeader("Referer");
+        return normalizeBaseUrl(referer);
+    }
+
+    private String normalizeBaseUrl(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+
+        try {
+            URI uri = URI.create(trimmed);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            int port = uri.getPort();
+            if (scheme == null || host == null) {
+                return null;
+            }
+
+            String base = port == -1 ? scheme + "://" + host : scheme + "://" + host + ":" + port;
+            return base.replaceAll("/$", "");
+        } catch (Exception ex) {
+            return null;
         }
     }
 

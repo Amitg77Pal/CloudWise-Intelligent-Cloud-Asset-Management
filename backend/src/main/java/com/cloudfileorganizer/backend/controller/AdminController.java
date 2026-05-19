@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -210,12 +211,56 @@ public class AdminController {
 
     @GetMapping("/transfers")
     public ResponseEntity<?> listTransfers(@RequestParam(value = "client_base_url", required = false) String clientBaseUrl,
-                                           @AuthenticationPrincipal User adminUser) {
+                                           @AuthenticationPrincipal User adminUser,
+                                           HttpServletRequest servletRequest) {
         ResponseEntity<?> auth = requireAdmin(adminUser);
         if (auth != null) return auth;
-        return ResponseEntity.ok(transferService.getActiveSessionsForAdmin(clientBaseUrl));
+        String resolvedBaseUrl = resolveClientBaseUrl(clientBaseUrl, servletRequest);
+        return ResponseEntity.ok(transferService.getActiveSessionsForAdmin(resolvedBaseUrl));
     }
 
+    private String resolveClientBaseUrl(String explicitBaseUrl, HttpServletRequest servletRequest) {
+        String fromExplicit = normalizeBaseUrl(explicitBaseUrl);
+        if (fromExplicit != null) {
+            return fromExplicit;
+        }
+
+        if (servletRequest == null) {
+            return null;
+        }
+
+        String origin = normalizeBaseUrl(servletRequest.getHeader("Origin"));
+        if (origin != null) {
+            return origin;
+        }
+
+        return normalizeBaseUrl(servletRequest.getHeader("Referer"));
+    }
+
+    private String normalizeBaseUrl(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+
+        try {
+            URI uri = URI.create(trimmed);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            int port = uri.getPort();
+            if (scheme == null || host == null) {
+                return null;
+            }
+
+            String base = port == -1 ? scheme + "://" + host : scheme + "://" + host + ":" + port;
+            return base.replaceAll("/$", "");
+        } catch (Exception ex) {
+            return null;
+        }
+    }
     @PostMapping("/transfers/end")
     public ResponseEntity<?> endTransfer(@RequestBody Map<String, Object> request,
                                          @AuthenticationPrincipal User adminUser) {

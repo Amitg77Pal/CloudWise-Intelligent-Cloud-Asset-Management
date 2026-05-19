@@ -26,9 +26,7 @@ Backend (backend/.env):
 - DB_USERNAME
 - DB_PASSWORD
 - SERVER_PORT
-- APP_BASE_URL
-- APP_CORS_ALLOWED_ORIGINS
-- FRONTEND_URLS
+- FRONTEND_URL
 - AWS_ACCESS_KEY_ID
 - AWS_SECRET_ACCESS_KEY
 - AWS_REGION
@@ -40,6 +38,9 @@ Backend (backend/.env):
 
 Frontend (frontend/.env):
 - VITE_API_BASE_URL
+
+Production CORS example (backend):
+- Set `FRONTEND_URL=https://www.scfo.app,https://smart-cloud-iota.vercel.app`
 
 ## Local Development
 Backend:

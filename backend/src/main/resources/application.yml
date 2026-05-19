@@ -56,14 +56,11 @@ logging:
     com.cloudfileorganizer: DEBUG
 
 app:
-  base-url: ${APP_BASE_URL}
   jwt:
     secret: ${JWT_SECRET:}
-  cors:
-    allowed-origins: ${frontend.urls}
 
 frontend:
-  urls: ${FRONTEND_URLS:${APP_CORS_ALLOWED_ORIGINS:${FRONTEND_URL:https://smart-cloud-iota.vercel.app,http://localhost:5173,http://127.0.0.1:5173}}}
+  urls: ${FRONTEND_URL:http://localhost:5173}
 
 resend:
   api-key: ${RESEND_API_KEY:}

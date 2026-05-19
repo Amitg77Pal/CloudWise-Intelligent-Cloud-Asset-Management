@@ -95,8 +95,10 @@ public class TransferService {
     @Value("${transfer.pin-encryption-key:}")
     private String pinEncryptionKey;
 
-    @Value("${app.base-url:http://localhost:5173}")
-    private String appBaseUrl;
+    // Comma-separated list of allowed frontend origins (also used as fallback base URL for generated links).
+    // Set via FRONTEND_URL in environment.
+    @Value("${frontend.urls:http://localhost:5173}")
+    private String frontendUrls;
 
     public Map<String, Object> createSession(Integer maxDownloads, Integer expiryMinutes, String clientBaseUrl, Long createdByUserId) {
         return createSessionInternal(maxDownloads, expiryMinutes, clientBaseUrl, createdByUserId, null, null, null);
@@ -685,7 +687,23 @@ public class TransferService {
                 return trimmed.replaceAll("/$", "");
             }
         }
-        return appBaseUrl;
+        return resolvePrimaryFrontendUrl();
+    }
+
+    private String resolvePrimaryFrontendUrl() {
+        String raw = frontendUrls;
+        if (raw == null || raw.isBlank()) {
+            return "http://localhost:5173";
+        }
+
+        String first = raw.split(",", 2)[0].trim();
+        if (first.endsWith("/")) {
+            first = first.replaceAll("/$", "");
+        }
+        if (first.startsWith("http://") || first.startsWith("https://")) {
+            return first;
+        }
+        return "http://localhost:5173";
     }
 
     private String generateQrCodeDataUrl(String value) {
