@@ -148,7 +148,7 @@ const Register = () => {
                 <input
                   type="email"
                   name="email"
-                  placeholder="name@company.com"
+                  placeholder="name@domain.com"
                   className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
                   value={formData.email}
                   onChange={handleChange}

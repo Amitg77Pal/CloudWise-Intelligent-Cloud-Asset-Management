@@ -1,5 +1,9 @@
 package com.cloudfileorganizer.backend.controller;
 
+import com.cloudfileorganizer.backend.dto.auth.ForgotPasswordRequest;
+import com.cloudfileorganizer.backend.dto.auth.ResetPasswordRequest;
+import com.cloudfileorganizer.backend.dto.auth.VerifyOtpRequest;
+import com.cloudfileorganizer.backend.dto.auth.VerifyOtpResponse;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -10,15 +14,17 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+
 import com.cloudfileorganizer.backend.repository.UserRepository;
 import com.cloudfileorganizer.backend.security.JwtUtil;
 import com.cloudfileorganizer.backend.model.User;
 import com.cloudfileorganizer.backend.service.AppSettingService;
+import com.cloudfileorganizer.backend.service.PasswordResetService;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.time.LocalDateTime;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -32,6 +38,9 @@ public class AuthController {
 
     @Autowired
     private AppSettingService appSettingService;
+
+    @Autowired
+    private PasswordResetService passwordResetService;
 
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
@@ -122,7 +131,8 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody User request) {
         try {
-            User user = userRepo.findByEmail(request.getEmail())
+            String email = request.getEmail() == null ? null : request.getEmail().trim();
+            User user = userRepo.findByEmailIgnoreCase(email)
                     .orElseThrow(() -> new RuntimeException("User not found"));
 
             if (!encoder.matches(request.getPassword(), user.getPassword())) {
@@ -170,64 +180,25 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public ResponseEntity<?> forgotPassword(@RequestBody Map<String, Object> payload) {
-        String email = payload.get("email") == null ? null : payload.get("email").toString();
-        if (email == null || email.trim().isEmpty()) {
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Email is required");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-        }
-
-        userRepo.findByEmail(email.trim().toLowerCase()).ifPresent(user -> {
-            String token = UUID.randomUUID().toString();
-            user.setResetToken(token);
-            user.setResetTokenExpiresAt(LocalDateTime.now().plusMinutes(30));
-            userRepo.save(user);
-        });
+    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequest payload, HttpServletRequest request) {
+        String requestIp = request == null ? null : request.getRemoteAddr();
+        passwordResetService.requestOtp(payload.email(), requestIp);
 
         Map<String, String> response = new HashMap<>();
-        response.put("message", "If the account exists, a reset link has been generated.");
+        response.put("message", "If the account exists, an OTP has been sent.");
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/verify-otp")
+    public ResponseEntity<?> verifyOtp(@Valid @RequestBody VerifyOtpRequest payload, HttpServletRequest request) {
+        String requestIp = request == null ? null : request.getRemoteAddr();
+        VerifyOtpResponse response = passwordResetService.verifyOtp(payload.email(), payload.otp(), requestIp);
         return ResponseEntity.ok(response);
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPassword(@RequestBody Map<String, Object> payload) {
-        String token = payload.get("token") == null ? null : payload.get("token").toString();
-        String password = payload.get("password") == null ? null : payload.get("password").toString();
-
-        if (token == null || token.trim().isEmpty()) {
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Token is required");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-        }
-
-        if (password == null || password.trim().isEmpty()) {
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Password is required");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-        }
-
-        String pwd = password;
-        if (pwd.length() < 8 || !pwd.matches(".*[A-Z].*") || !pwd.matches(".*[a-z].*") || !pwd.matches(".*[0-9].*")
-                || !pwd.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?].*")) {
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Password must be at least 8 characters with uppercase, lowercase, number, and special character");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-        }
-
-        User user = userRepo.findByResetToken(token)
-                .orElse(null);
-        if (user == null || user.getResetTokenExpiresAt() == null
-                || user.getResetTokenExpiresAt().isBefore(LocalDateTime.now())) {
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Reset token is invalid or expired");
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-        }
-
-        user.setPassword(encoder.encode(password));
-        user.setResetToken(null);
-        user.setResetTokenExpiresAt(null);
-        userRepo.save(user);
+    public ResponseEntity<?> resetPassword(@Valid @RequestBody ResetPasswordRequest payload) {
+        passwordResetService.resetPassword(payload.token(), payload.password());
 
         Map<String, String> response = new HashMap<>();
         response.put("message", "Password reset successfully");

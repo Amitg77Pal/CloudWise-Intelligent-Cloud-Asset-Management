@@ -57,8 +57,17 @@ logging:
 
 app:
   base-url: ${APP_BASE_URL}
+  jwt:
+    secret: ${JWT_SECRET:}
   cors:
-    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:https://smart-cloud-iota.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
+    allowed-origins: ${frontend.urls}
+
+frontend:
+  urls: ${FRONTEND_URLS:${APP_CORS_ALLOWED_ORIGINS:${FRONTEND_URL:https://smart-cloud-iota.vercel.app,http://localhost:5173,http://127.0.0.1:5173}}}
+
+resend:
+  api-key: ${RESEND_API_KEY:}
+  from: ${RESEND_FROM:onboarding@resend.dev}
 
 transfer:
   default-expiry-minutes: ${TRANSFER_DEFAULT_EXPIRY_MINUTES:10}

@@ -285,7 +285,13 @@ const AuthPage = () => {
                                         <div className="space-y-1.5">
                                             <div className="flex justify-between items-center">
                                                 <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Password</label>
-                                                <button type="button" className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400">Forgot password?</button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => navigate('/forgot-password')}
+                                                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400"
+                                                >
+                                                    Forgot password?
+                                                </button>
                                             </div>
                                             <div className="relative group">
                                                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
