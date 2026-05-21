@@ -26,6 +26,9 @@ public class TransferSession {
     @Column(name = "source_file_id", length = 64)
     private String sourceFileId;
 
+    @Column(name = "source_file_ids", length = 4000)
+    private String sourceFileIds;
+
     @Column(name = "original_file_name", length = 255)
     private String originalFileName;
 
@@ -104,6 +107,14 @@ public class TransferSession {
 
     public void setSourceFileId(String sourceFileId) {
         this.sourceFileId = sourceFileId;
+    }
+
+    public String getSourceFileIds() {
+        return sourceFileIds;
+    }
+
+    public void setSourceFileIds(String sourceFileIds) {
+        this.sourceFileIds = sourceFileIds;
     }
 
     public String getOriginalFileName() {

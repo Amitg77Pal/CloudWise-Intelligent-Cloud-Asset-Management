@@ -1,7 +1,7 @@
 # AWS S3 Cloud Storage Integration - Phase 2
 
 ## Overview
-This document summarizes the AWS S3 integration implementation for CloudVault AI backend.
+This document summarizes the AWS S3 integration implementation for CloudWise AI backend.
 
 ## Implementation Summary
 
@@ -289,10 +289,3 @@ Note on auto-delete messaging:
 - **File Size Limit**: 100MB maximum file size (configurable in `FileService`)
 - **URL Expiration**: Pre-signed URLs expire after 60 minutes (configurable)
 
-## Future Enhancements
-
-- ML-based automatic file categorization (Phase 3)
-- File versioning
-- Batch upload/download
-- File sharing between users
-- Advanced search and filtering

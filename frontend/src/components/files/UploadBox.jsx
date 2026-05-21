@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Upload, X, Cloud, File } from 'lucide-react';
 import Button from '../common/Button';
 
-const UploadBox = ({ onUpload, accept, multiple = false }) => {
+const UploadBox = ({ onUpload, accept, multiple = false, maxFileSizeBytes = 100 * 1024 * 1024 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
@@ -47,10 +47,20 @@ const UploadBox = ({ onUpload, accept, multiple = false }) => {
   };
 
   const handleFiles = (files) => {
+    const filtered = [];
+    for (const f of files) {
+      if (maxFileSizeBytes > 0 && f.size > maxFileSizeBytes) {
+        // Inform user about rejected file
+        try { window.alert(`File "${f.name}" exceeds the allowed max size of ${Math.round(maxFileSizeBytes / (1024*1024))} MB and was skipped.`); } catch (e) {}
+        continue;
+      }
+      filtered.push(f);
+    }
+    if (!filtered.length) return;
     if (multiple) {
-      setSelectedFiles((prev) => [...prev, ...files]);
+      setSelectedFiles((prev) => [...prev, ...filtered]);
     } else {
-      setSelectedFiles(files.slice(0, 1));
+      setSelectedFiles(filtered.slice(0, 1));
     }
   };
 

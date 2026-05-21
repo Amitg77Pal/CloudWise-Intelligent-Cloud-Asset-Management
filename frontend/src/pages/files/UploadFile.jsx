@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import fileService from '../../services/fileService';
 import UploadBox from '../../components/files/UploadBox';
@@ -14,6 +14,21 @@ const UploadFile = () => {
   const messageRef = useRef(null);
   const progressRef = useRef(null);
   const { showToast } = useToast();
+  const [uploadMaxFileSizeBytes, setUploadMaxFileSizeBytes] = useState(100 * 1024 * 1024);
+
+  useEffect(() => {
+    let mounted = true;
+    import('../../services/adminService').then((mod) => {
+      const adminService = mod.adminService;
+      adminService.getSettings().then((settings) => {
+        if (mounted && settings && typeof settings.uploadMaxFileSizeBytes === 'number') {
+          const val = settings.uploadMaxFileSizeBytes;
+          if (typeof val === 'number' && val > 0) setUploadMaxFileSizeBytes(val);
+        }
+      }).catch(() => {});
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
 
   const isMobileViewport = () => {
     if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -147,7 +162,7 @@ const UploadFile = () => {
       {/* Main Upload Area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-10">
         <div className="lg:col-span-2">
-          <UploadBox onUpload={handleUpload} multiple={true} />
+          <UploadBox onUpload={handleUpload} multiple={true} maxFileSizeBytes={uploadMaxFileSizeBytes} />
         </div>
 
         <div className="space-y-6">
@@ -159,12 +174,12 @@ const UploadFile = () => {
               <h3 className="font-black text-slate-800 dark:text-white uppercase tracking-wider text-sm">Upload Info</h3>
             </div>
             <div className="space-y-6">
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center gap-3 mb-2">
                   <Zap size={16} className="text-amber-500" />
                   <span className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase underline decoration-amber-500/30 underline-offset-4">Max File Size</span>
                 </div>
-                <p className="text-base sm:text-lg font-black text-slate-900 dark:text-white">100 MB</p>
+                <p className="text-base sm:text-lg font-black text-slate-900 dark:text-white">{(uploadMaxFileSizeBytes / (1024 * 1024)).toFixed(0)} MB</p>
                 <p className="text-[10px] text-slate-500 font-bold uppercase mt-1">Per upload</p>
               </div>
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">

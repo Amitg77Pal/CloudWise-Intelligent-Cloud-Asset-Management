@@ -21,7 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import fileService from '../../services/fileService';
 import { useToast } from '../../context/ToastContext';
 
-const FileCard = ({ file, viewMode = 'grid' }) => {
+const FileCard = ({ file, viewMode = 'grid', onDeleted }) => {
   const navigate = useNavigate();
   const { showToast } = useToast();
 
@@ -66,7 +66,9 @@ const FileCard = ({ file, viewMode = 'grid' }) => {
       return;
     }
     showToast({ type: 'success', message: 'File deleted.', duration: 7000 });
-    setTimeout(() => window.location.reload(), 800);
+    if (typeof onDeleted === 'function') {
+      onDeleted(file.id);
+    }
   };
 
   if (viewMode === 'list') {

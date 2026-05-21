@@ -1,5 +1,35 @@
 import api from './api';
 
+const sanitizeDownloadFileName = (rawName) => {
+  const input = String(rawName || '').trim();
+  if (!input) return 'download';
+  const noPath = input.replace(/[\\/]/g, '_');
+  const noControls = noPath.replace(/[\x00-\x1f\x7f]/g, '');
+  const collapsed = noControls.replace(/\s+/g, ' ').trim();
+  if (!collapsed || collapsed === '.' || collapsed === '..') return 'download';
+  return collapsed.slice(0, 180);
+};
+
+const parseFilenameFromContentDisposition = (disposition) => {
+  if (!disposition) return null;
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;\n]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return sanitizeDownloadFileName(decodeURIComponent(utf8Match[1]));
+    } catch {
+      // ignore
+    }
+  }
+
+  const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+  if (match?.[1]) {
+    return sanitizeDownloadFileName(match[1].replace(/['"]/g, '').trim());
+  }
+
+  return null;
+};
+
 const fileService = {
   uploadFile: async (file, onProgress) => {
     const formData = new FormData();
@@ -110,6 +140,63 @@ const fileService = {
     }
   },
 
+  downloadFilesZip: async (ids, fallbackName = 'my-files.zip') => {
+    try {
+      const response = await api.post(
+        '/api/files/download-zip',
+        { ids },
+        { responseType: 'blob' }
+      );
+      // If the server returned JSON (error) as a blob, try to extract a useful message
+      const contentType = response.headers?.['content-type'] || response.data?.type || '';
+      if (String(contentType).includes('application/json')) {
+        try {
+          const text = await response.data.text();
+          const parsed = JSON.parse(text);
+          return { success: false, error: parsed?.error || parsed?.message || text };
+        } catch (e) {
+          return { success: false, error: 'Server returned an error for the ZIP download.' };
+        }
+      }
+
+      const disposition = response.headers?.['content-disposition'];
+      const headerName = parseFilenameFromContentDisposition(disposition);
+      const downloadName = headerName || sanitizeDownloadFileName(fallbackName);
+
+      const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: 'application/zip' });
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      return { success: true };
+    } catch (error) {
+      console.error('Bulk ZIP download failed:', error);
+      // If backend returned an error as a blob (responseType blob), try to extract it
+      if (error?.response?.data && typeof error.response.data.text === 'function') {
+        try {
+          const text = await error.response.data.text();
+          try {
+            const parsed = JSON.parse(text);
+            return { success: false, error: parsed?.error || parsed?.message || text };
+          } catch {
+            return { success: false, error: text.slice(0, 400) };
+          }
+        } catch (e) {
+          // fallthrough
+        }
+      }
+      return { success: false, error: error.message };
+    }
+  },
+
   getCategories: async () => {
     try {
       const response = await api.get('/api/files/categories');
@@ -126,6 +213,16 @@ const fileService = {
       return { success: true, data: response.data };
     } catch (error) {
       console.error('Error updating category:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  updateCategoryBulk: async (ids, category) => {
+    try {
+      const response = await api.put('/api/files/bulk/category', { ids, category });
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Bulk category update failed:', error);
       return { success: false, error: error.message };
     }
   },

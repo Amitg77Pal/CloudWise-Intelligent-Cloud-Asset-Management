@@ -9,9 +9,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.springframework.transaction.annotation.Transactional;
 import com.cloudfileorganizer.backend.model.AiAnalysisStatus;
@@ -204,6 +214,198 @@ public class FileService {
                 .orElseThrow(() -> new IllegalArgumentException("File not found or access denied"));
         file.setCategory(normalizeCategory(newCategory));
         return fileRepository.save(file);
+    }
+
+    @Transactional
+    public int updateCategoryBulk(List<String> ids, User user, String newCategory) {
+        if (ids == null || ids.isEmpty()) {
+            throw new IllegalArgumentException("No IDs provided");
+        }
+        String normalizedCategory = normalizeCategory(newCategory);
+
+        int updated = 0;
+        for (String id : ids) {
+            if (id == null || id.isBlank()) continue;
+            FileMetadata file = fileRepository.findByIdAndUser(id.trim(), user)
+                    .orElseThrow(() -> new IllegalArgumentException("File not found or access denied"));
+            file.setCategory(normalizedCategory);
+            fileRepository.save(file);
+            updated++;
+        }
+        return updated;
+    }
+
+    /**
+     * Normalizes an incoming request payload value into a unique list of string IDs.
+     * Accepts either a JSON array or a single string.
+     */
+    public List<String> normalizeIds(Object rawIds) {
+        List<String> ids = new ArrayList<>();
+
+        if (rawIds instanceof List<?> list) {
+            for (Object item : list) {
+                if (item == null) continue;
+                String value = String.valueOf(item).trim();
+                if (!value.isEmpty()) {
+                    ids.add(value);
+                }
+            }
+        } else if (rawIds != null) {
+            String value = String.valueOf(rawIds).trim();
+            if (!value.isEmpty()) {
+                ids.add(value);
+            }
+        }
+
+        // distinct, keep order
+        List<String> distinct = new ArrayList<>();
+        for (String id : ids) {
+            if (!distinct.contains(id)) {
+                distinct.add(id);
+            }
+        }
+        return distinct;
+    }
+
+    @Transactional(readOnly = true)
+    public InputStream buildZipStream(List<String> ids, User user) {
+        if (ids == null || ids.isEmpty()) {
+            throw new IllegalArgumentException("No IDs provided");
+        }
+
+        // Pre-validate all requested files up-front so we can fail fast with a clean HTTP error
+        // rather than starting a ZIP stream that later becomes corrupt.
+        List<String> normalizedIds = new ArrayList<>();
+        for (String id : ids) {
+            if (id == null) continue;
+            String trimmed = id.trim();
+            if (!trimmed.isEmpty() && !normalizedIds.contains(trimmed)) {
+                normalizedIds.add(trimmed);
+            }
+        }
+        if (normalizedIds.isEmpty()) {
+            throw new IllegalArgumentException("No IDs provided");
+        }
+
+        List<FileMetadata> filesToZip = new ArrayList<>();
+        for (String id : normalizedIds) {
+            FileMetadata file = fileRepository.findByIdAndUser(id, user)
+                    .orElseThrow(() -> new IllegalArgumentException("File not found or access denied"));
+            if (file.getS3Key() == null || file.getS3Key().isBlank()) {
+                throw new IllegalArgumentException("File storage reference missing");
+            }
+            // Ensure the object exists before streaming.
+            if (!s3Service.fileExists(file.getS3Key())) {
+                throw new IllegalArgumentException("File content missing in storage");
+            }
+            filesToZip.add(file);
+        }
+
+        try {
+            PipedOutputStream output = new PipedOutputStream();
+            PipedInputStream input = new PipedInputStream(output, 64 * 1024);
+
+            Thread worker = new Thread(() -> {
+                try (ZipOutputStream zip = new ZipOutputStream(output)) {
+                    Map<String, Integer> seenNames = new HashMap<>();
+
+                    for (FileMetadata file : filesToZip) {
+                        String rawName = (file.getOriginalName() != null && !file.getOriginalName().isBlank())
+                                ? file.getOriginalName()
+                                : (file.getName() != null ? file.getName() : "file");
+                        String safeName = makeZipEntryNameUnique(sanitizeZipEntryName(rawName), seenNames);
+
+                        boolean entryOpened = false;
+                        try {
+                            zip.putNextEntry(new ZipEntry(safeName));
+                            entryOpened = true;
+
+                            S3Service.S3ObjectPayload payload = s3Service.getFileWithMetadata(file.getS3Key());
+                            try (InputStream in = payload.getStream()) {
+                                in.transferTo(zip);
+                            }
+                        } catch (Exception ex) {
+                            // Keep the ZIP valid even if a single file fails unexpectedly.
+                            try {
+                                if (entryOpened) {
+                                    zip.closeEntry();
+                                }
+                            } catch (IOException ignored) {
+                                // ignore
+                            }
+
+                            try {
+                                String errorEntryName = makeZipEntryNameUnique("__ERROR__-" + safeName + ".txt", seenNames);
+                                zip.putNextEntry(new ZipEntry(errorEntryName));
+                                String msg = "Failed to include file '" + rawName + "' in ZIP download.\nReason: " + ex.getMessage() + "\n";
+                                zip.write(msg.getBytes(StandardCharsets.UTF_8));
+                                zip.closeEntry();
+                            } catch (Exception ignored) {
+                                // If even the error entry fails, best effort is to continue.
+                            }
+                            continue;
+                        }
+
+                        try {
+                            zip.closeEntry();
+                        } catch (IOException ignored) {
+                            // ignore
+                        }
+                    }
+                } catch (Exception ex) {
+                    try {
+                        output.close();
+                    } catch (IOException ignored) {
+                        // ignore
+                    }
+                }
+            }, "files-zip-" + Objects.hash(user.getId(), System.nanoTime()));
+
+            worker.setDaemon(true);
+            worker.start();
+            return input;
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to prepare ZIP download");
+        }
+    }
+
+    private String sanitizeZipEntryName(String filename) {
+        String input = filename == null ? "" : filename;
+        String noTraversal = input.replace("..", "");
+        String noSlashes = noTraversal.replace("/", "_").replace("\\", "_");
+        String collapsed = noSlashes.trim();
+        if (collapsed.isEmpty()) {
+            return "file";
+        }
+        return collapsed.length() > 180 ? collapsed.substring(0, 180) : collapsed;
+    }
+
+    private String makeZipEntryNameUnique(String proposed, Map<String, Integer> seen) {
+        String name = (proposed == null || proposed.isBlank()) ? "file" : proposed;
+
+        int current = seen.getOrDefault(name, 0);
+        if (current == 0) {
+            seen.put(name, 1);
+            return name;
+        }
+
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && dot < name.length() - 1) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+
+        int nextIndex = current + 1;
+        String next = base + "-" + nextIndex + ext;
+        while (seen.containsKey(next)) {
+            nextIndex++;
+            next = base + "-" + nextIndex + ext;
+        }
+        seen.put(name, nextIndex);
+        seen.put(next, 1);
+        return next;
     }
 
     public List<FileMetadata> searchFiles(User user, String query) {

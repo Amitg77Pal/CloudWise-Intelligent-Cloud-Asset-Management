@@ -194,7 +194,14 @@ const Dashboard = () => {
               ))
             ) : recentFiles.length > 0 ? (
               recentFiles.map(file => (
-                <FileCard key={file.id} file={file} viewMode="grid" />
+                <FileCard
+                  key={file.id}
+                  file={file}
+                  viewMode="grid"
+                  onDeleted={(deletedId) => {
+                    setFiles((prev) => (prev || []).filter((item) => item.id !== deletedId));
+                  }}
+                />
               ))
             ) : (
               <div className="col-span-2 py-16 flex flex-col items-center justify-center bg-white/95 dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-700/70 rounded-2xl text-center shadow-sm">

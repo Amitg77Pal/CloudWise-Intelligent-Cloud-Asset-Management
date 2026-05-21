@@ -14,9 +14,10 @@ public class AsyncConfig {
     @Bean(name = "taskExecutor")
     public Executor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(5);
-        executor.setQueueCapacity(50);
+        // Increase pool sizes to prioritize AI analysis tasks after upload
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(20);
+        executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("AiService-");
         executor.initialize();
         return executor;

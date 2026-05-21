@@ -9,17 +9,23 @@ import {
   Binary,
   ArrowUpDown,
   Database,
-  Trash2
+  Trash2,
+  Download,
+  Share2,
+  Tags
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import fileService from '../../services/fileService';
 import FileCard from '../../components/files/FileCard';
 import Button from '../../components/common/Button';
 import CustomSelect from '../../components/common/CustomSelect';
+import Modal from '../../components/common/Modal';
+import Input from '../../components/common/Input';
 import { parseAiTags } from '../../utils/aiTags';
 import { useToast } from '../../context/ToastContext';
 
 const MyFiles = () => {
+  const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -33,6 +39,9 @@ const MyFiles = () => {
   const [selectedTag, setSelectedTag] = useState('All');
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkCategoryModalOpen, setBulkCategoryModalOpen] = useState(false);
+  const [bulkCategoryValue, setBulkCategoryValue] = useState('');
   const searchInputRef = useRef(null);
   const { showToast } = useToast();
 
@@ -102,13 +111,71 @@ const MyFiles = () => {
         loadCategories();
         showToast({ type: 'success', message: `Deleted ${selectedFiles.length} file(s).` });
       } else {
-        setError(result.message || 'Failed to delete selected files.');
-        showToast({ type: 'error', message: result.message || 'Bulk delete failed.' });
+        setError(result.error || 'Failed to delete selected files.');
+        showToast({ type: 'error', message: result.error || 'Bulk delete failed.' });
       }
     } catch (err) {
       console.error('Bulk delete failed:', err);
       setError('An error occurred during bulk deletion.');
       showToast({ type: 'error', message: 'Bulk delete failed. Please try again.' });
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    if (!selectedFiles.length) return;
+    try {
+      setBulkBusy(true);
+      const result = await fileService.downloadFilesZip(selectedFiles, 'my-files.zip');
+      if (!result.success) {
+        showToast({ type: 'error', message: result.error || 'Bulk download failed.', duration: 7000 });
+        return;
+      }
+      showToast({ type: 'success', message: 'Download started (ZIP).', duration: 6000 });
+    } catch (err) {
+      console.error('Bulk download failed:', err);
+      showToast({ type: 'error', message: 'Bulk download failed. Please try again.', duration: 7000 });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkTransfer = async () => {
+    if (!selectedFiles.length) return;
+    // Navigate to Transfer page with preselected ids.
+    navigate('/transfer', { state: { preselectedFileIds: selectedFiles } });
+  };
+
+  const openBulkCategoryModal = () => {
+    setBulkCategoryValue('');
+    setBulkCategoryModalOpen(true);
+  };
+
+  const applyBulkCategory = async () => {
+    if (!selectedFiles.length) return;
+    const nextCategory = bulkCategoryValue.trim();
+    if (!nextCategory) {
+      showToast({ type: 'error', message: 'Category cannot be empty.', duration: 6000 });
+      return;
+    }
+
+    try {
+      setBulkBusy(true);
+      const result = await fileService.updateCategoryBulk(selectedFiles, nextCategory);
+      if (!result.success) {
+        showToast({ type: 'error', message: result.error || 'Bulk update failed.', duration: 7000 });
+        return;
+      }
+      showToast({ type: 'success', message: `Updated category for ${selectedFiles.length} file(s).`, duration: 7000 });
+      setBulkCategoryModalOpen(false);
+      setSelectedFiles([]);
+      setIsSelectionMode(false);
+      loadFiles();
+      loadCategories();
+    } catch (err) {
+      console.error('Bulk category update failed:', err);
+      showToast({ type: 'error', message: 'Bulk category update failed. Please try again.', duration: 7000 });
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -262,24 +329,51 @@ const MyFiles = () => {
           </div>
 
           <Button
-            variant="ghost"
+            variant="primary"
             onClick={() => {
               setIsSelectionMode(!isSelectionMode);
               if (isSelectionMode) setSelectedFiles([]);
             }}
-            className={`px-4 rounded-xl text-sm font-bold w-full sm:w-auto ${isSelectionMode ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30' : 'text-slate-500'}`}
+            className={`px-4 rounded-xl text-sm font-bold w-full sm:w-auto ${isSelectionMode ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
           >
             {isSelectionMode ? 'Cancel Selection' : 'Select'}
           </Button>
 
-          {isSelectionMode && selectedFiles.length > 0 && (
-            <Button
-              variant="danger"
-              onClick={handleBulkDelete}
-              className="bg-rose-500 hover:bg-rose-600 text-white shadow-sm rounded-xl px-4 text-sm font-bold w-full sm:w-auto"
-            >
-              <Trash2 size={16} className="mr-2" /> Delete ({selectedFiles.length})
-            </Button>
+          {isSelectionMode && (
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+              <Button
+                variant="secondary"
+                onClick={handleBulkDownload}
+                disabled={!selectedFiles.length || bulkBusy}
+                className="rounded-xl px-4 text-sm font-bold w-full sm:w-auto"
+              >
+                <Download size={16} className="mr-2" /> Download ({selectedFiles.length || 0})
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleBulkTransfer}
+                disabled={!selectedFiles.length || bulkBusy}
+                className="rounded-xl px-4 text-sm font-bold w-full sm:w-auto"
+              >
+                <Share2 size={16} className="mr-2" /> Transfer
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={openBulkCategoryModal}
+                disabled={!selectedFiles.length || bulkBusy}
+                className="rounded-xl px-4 text-sm font-bold w-full sm:w-auto"
+              >
+                <Tags size={16} className="mr-2" /> Update
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleBulkDelete}
+                disabled={!selectedFiles.length || bulkBusy}
+                className="bg-rose-500 hover:bg-rose-600 text-white shadow-sm rounded-xl px-4 text-sm font-bold w-full sm:w-auto"
+              >
+                <Trash2 size={16} className="mr-2" /> Delete
+              </Button>
+            </div>
           )}
 
           <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden md:block"></div>
@@ -339,7 +433,14 @@ const MyFiles = () => {
         }>
           {filteredAndSortedFiles.map(file => (
             <div key={file.id} className="relative group cursor-pointer">
-              <FileCard file={file} viewMode={viewMode} />
+              <FileCard
+                file={file}
+                viewMode={viewMode}
+                onDeleted={(deletedId) => {
+                  setFiles((prev) => (prev || []).filter((item) => item.id !== deletedId));
+                  loadCategories();
+                }}
+              />
 
               {isSelectionMode && (
                 <div
@@ -380,6 +481,53 @@ const MyFiles = () => {
           </Button>
         </div>
       )}
+
+      <Modal
+        isOpen={bulkCategoryModalOpen}
+        onClose={() => setBulkCategoryModalOpen(false)}
+        title={`Update Category (${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'})`}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setBulkCategoryModalOpen(false)} disabled={bulkBusy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={applyBulkCategory} disabled={bulkBusy}>
+              Apply
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <Input
+            label="Category"
+            placeholder="e.g. Documents"
+            value={bulkCategoryValue}
+            onChange={(e) => setBulkCategoryValue(e.target.value)}
+            required
+          />
+
+          {categories.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick pick</div>
+              <div className="flex flex-wrap gap-2">
+                {categories.slice(0, 12).map((cat) => (
+                  <button
+                    key={cat.category}
+                    type="button"
+                    onClick={() => setBulkCategoryValue(cat.category)}
+                    className="px-3 py-1.5 rounded-full text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                  >
+                    {cat.category}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="text-xs text-slate-500">
+            This updates only the category metadata (no re-upload).
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

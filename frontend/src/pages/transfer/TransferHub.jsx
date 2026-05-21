@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QrCode, Link as LinkIcon, Copy, UploadCloud, ShieldCheck, DownloadCloud, FolderOpen, Search, FileText, CheckCircle2, HardDrive } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import transferService from '../../services/transferService';
 import JSZip from 'jszip';
 import fileService from '../../services/fileService';
@@ -7,6 +8,7 @@ import Button from '../../components/common/Button';
 import { useToast } from '../../context/ToastContext';
 
 const TransferHub = () => {
+  const location = useLocation();
   const [step, setStep] = useState(1);
   const [session, setSession] = useState(null);
   const [files, setFiles] = useState([]);
@@ -14,19 +16,30 @@ const TransferHub = () => {
   const [error, setError] = useState('');
   const [activeTransfers, setActiveTransfers] = useState([]);
   const [loadingTransfers, setLoadingTransfers] = useState(false);
+  const [adminSettings, setAdminSettings] = useState(null);
   const [transferMode, setTransferMode] = useState('upload');
   const [existingFiles, setExistingFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [selectedExistingFileId, setSelectedExistingFileId] = useState('');
+  const [selectedExistingFileIds, setSelectedExistingFileIds] = useState([]);
   const [existingSearch, setExistingSearch] = useState('');
   const { showToast } = useToast();
 
+  const handledPrefillRef = useRef(false);
+  const prefillExistingIdsRef = useRef(null);
+
   const transferUrl = useMemo(() => session?.transfer_url || '', [session]);
   const autoDeleteAt = useMemo(() => session?.auto_delete_at || session?.expires_at || null, [session]);
-  const selectedExistingFile = useMemo(
-    () => existingFiles.find((candidate) => String(candidate.id) === String(selectedExistingFileId)) || null,
-    [existingFiles, selectedExistingFileId]
+  const selectedExistingFileSet = useMemo(
+    () => new Set((selectedExistingFileIds || []).map((value) => String(value))),
+    [selectedExistingFileIds]
   );
+
+  const selectedExistingFiles = useMemo(
+    () => existingFiles.filter((candidate) => selectedExistingFileSet.has(String(candidate.id))),
+    [existingFiles, selectedExistingFileSet]
+  );
+
+  const selectedExistingFile = useMemo(() => selectedExistingFiles[0] || null, [selectedExistingFiles]);
 
   const filteredExistingFiles = useMemo(() => {
     const query = existingSearch.trim().toLowerCase();
@@ -99,14 +112,68 @@ const TransferHub = () => {
   useEffect(() => {
     loadMyTransfers();
     loadExistingFiles();
+    // fetch admin settings for transfer limits
+    (async () => {
+      try {
+        const mod = await import('../../services/adminService');
+        const admin = mod.adminService;
+        const settings = await admin.getSettings();
+        if (settings) setAdminSettings(settings);
+      } catch (e) {
+        // ignore
+      }
+    })();
   }, []);
+
+  useEffect(() => {
+    const hydratePinIfMissing = async () => {
+      if (step !== 3) return;
+      if (!session?.session_id) return;
+      if (session?.pin) return;
+
+      const fromLocalList = (activeTransfers || []).find((item) => item?.session_id === session.session_id && item?.pin);
+      if (fromLocalList?.pin) {
+        setSession((prev) => (prev ? { ...prev, pin: fromLocalList.pin } : prev));
+        return;
+      }
+
+      try {
+        const res = await transferService.getMySessions();
+        if (!res?.success) return;
+        const found = (res.data?.items || []).find((item) => item?.session_id === session.session_id && item?.pin);
+        if (found?.pin) {
+          setSession((prev) => (prev ? { ...prev, pin: found.pin } : prev));
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    hydratePinIfMissing();
+  }, [step, session?.session_id, session?.pin, activeTransfers]);
+
+  useEffect(() => {
+    if (handledPrefillRef.current) return;
+    const ids = location?.state?.preselectedFileIds;
+    if (Array.isArray(ids) && ids.length > 0) {
+      handledPrefillRef.current = true;
+      prefillExistingIdsRef.current = ids.map((value) => String(value));
+      setTransferMode('existing');
+    }
+  }, [location?.state]);
 
   useEffect(() => {
     setStep(1);
     setSession(null);
     setFiles([]);
     setError('');
-    setSelectedExistingFileId('');
+    if (transferMode === 'existing' && Array.isArray(prefillExistingIdsRef.current) && prefillExistingIdsRef.current.length > 0) {
+      setSelectedExistingFileIds(prefillExistingIdsRef.current);
+      prefillExistingIdsRef.current = null;
+      showToast({ type: 'success', message: 'Selected files ready for transfer. Click “Share Selected Files”.', duration: 6000 });
+    } else {
+      setSelectedExistingFileIds([]);
+    }
   }, [transferMode]);
 
   const endSession = async (sessionId) => {
@@ -135,7 +202,9 @@ const TransferHub = () => {
     try {
       setLoading(true);
       setError('');
-      const res = await transferService.createSession({ max_downloads: 1, expiry_minutes: 10 });
+      const maxDownloads = adminSettings?.transferDefaultMaxDownloads ?? 1;
+      const expiryMinutes = adminSettings?.transferDefaultExpiryMinutes ?? 10;
+      const res = await transferService.createSession({ max_downloads: maxDownloads, expiry_minutes: expiryMinutes });
       if (!res.success) {
         setError(res.error || 'Failed to create session');
         showToast({ type: 'error', message: res.error || 'Failed to create transfer session.', duration: 7000 });
@@ -154,15 +223,17 @@ const TransferHub = () => {
   };
 
   const createExistingFileTransfer = async () => {
-    if (!selectedExistingFile?.id) return;
+    if (!selectedExistingFileIds || selectedExistingFileIds.length === 0) return;
 
     try {
       setLoading(true);
       setError('');
+      const maxDownloads = adminSettings?.transferDefaultMaxDownloads ?? 1;
+      const expiryMinutes = adminSettings?.transferDefaultExpiryMinutes ?? 10;
       const res = await transferService.createSessionFromFile({
-        file_id: selectedExistingFile.id,
-        max_downloads: 1,
-        expiry_minutes: 10,
+        file_ids: selectedExistingFileIds,
+        max_downloads: maxDownloads,
+        expiry_minutes: expiryMinutes,
       });
 
       if (!res.success) {
@@ -174,7 +245,11 @@ const TransferHub = () => {
       setSession(res.data);
       setStep(3);
       loadMyTransfers();
-      showToast({ type: 'success', message: 'Existing cloud file is ready to share.', duration: 6000 });
+      showToast({
+        type: 'success',
+        message: selectedExistingFileIds.length > 1 ? 'Existing cloud files are ready to share.' : 'Existing cloud file is ready to share.',
+        duration: 6000,
+      });
     } catch (e) {
       setError(e?.response?.data?.error || 'Failed to create session');
       showToast({ type: 'error', message: e?.response?.data?.error || 'Failed to create transfer session.', duration: 7000 });
@@ -184,21 +259,36 @@ const TransferHub = () => {
   };
 
   const MAX_COMBINED_SIZE = 50 * 1024 * 1024; // 50 MB client-side guard (backend also enforces)
+  const effectiveTransferMax = adminSettings?.transferMaxFileSizeBytes || (50 * 1024 * 1024);
+  const MAX_COMBINED_SIZE_DYNAMIC = effectiveTransferMax;
 
   const uploadAndFinalize = async () => {
     if ((!files || files.length === 0) || !session?.session_id) return;
 
     // compute combined size
     const combinedSize = files.reduce((s, f) => s + (f.size || 0), 0);
-    if (combinedSize > MAX_COMBINED_SIZE) {
-      setError('Combined file size exceeds 50 MB upload limit');
-      showToast({ type: 'error', message: 'Combined file size exceeds 50 MB upload limit.' });
+    if (combinedSize > MAX_COMBINED_SIZE_DYNAMIC) {
+      const mb = Math.round(MAX_COMBINED_SIZE_DYNAMIC / (1024 * 1024));
+      setError(`Combined file size exceeds ${mb} MB upload limit`);
+      showToast({ type: 'error', message: `Combined file size exceeds ${mb} MB upload limit.` });
       return;
     }
 
     try {
       setLoading(true);
       setError('');
+
+      // Per-file size validation against transfer max
+      const perFileLimit = effectiveTransferMax;
+      for (const f of files) {
+        if (perFileLimit > 0 && f.size > perFileLimit) {
+          const mb = Math.round(perFileLimit / (1024 * 1024));
+          setError(`File "${f.name}" exceeds the per-file transfer limit of ${mb} MB`);
+          showToast({ type: 'error', message: `File "${f.name}" exceeds the per-file transfer limit of ${mb} MB.` });
+          setLoading(false);
+          return;
+        }
+      }
 
       let uploadFile = null;
       let uploadName = null;
@@ -264,10 +354,10 @@ const TransferHub = () => {
     }
   };
 
-  const copyText = async (text) => {
+  const copyText = async (text, toastMessage = 'Copied to clipboard.') => {
     if (!text) return;
     await navigator.clipboard.writeText(text);
-    showToast({ type: 'success', message: 'Link copied to clipboard.', duration: 4000 });
+    showToast({ type: 'success', message: toastMessage, duration: 4000 });
   };
 
   const sourceBadge = transferMode === 'existing' ? 'Existing AWS file' : 'Upload from device';
@@ -391,7 +481,7 @@ const TransferHub = () => {
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-sm font-bold text-slate-700 dark:text-slate-300">
                 <Search size={16} />
-                Pick a stored file
+                Pick stored file(s)
               </div>
               <input
                 value={existingSearch}
@@ -410,12 +500,21 @@ const TransferHub = () => {
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 max-h-[420px] overflow-y-auto pr-1">
                 {filteredExistingFiles.map((storedFile) => {
-                  const selected = String(storedFile.id) === String(selectedExistingFileId);
+                  const storedFileId = String(storedFile.id);
+                  const selected = selectedExistingFileSet.has(storedFileId);
                   return (
                     <button
                       key={storedFile.id}
                       type="button"
-                      onClick={() => setSelectedExistingFileId(storedFile.id)}
+                      onClick={() => {
+                        setSelectedExistingFileIds((prev) => {
+                          const prevIds = (prev || []).map((value) => String(value));
+                          if (prevIds.includes(storedFileId)) {
+                            return prevIds.filter((value) => value !== storedFileId);
+                          }
+                          return [...prevIds, storedFileId];
+                        });
+                      }}
                       className={`text-left rounded-2xl border p-4 transition-all ${selected ? 'border-emerald-300 bg-emerald-50 dark:bg-emerald-900/10 dark:border-emerald-700 shadow-sm' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-300'}`}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -441,12 +540,17 @@ const TransferHub = () => {
             )}
 
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <Button variant="primary" onClick={createExistingFileTransfer} disabled={!selectedExistingFileId || loading}>
-                {loading ? 'Preparing...' : 'Share Selected File'}
+              <Button variant="primary" onClick={createExistingFileTransfer} disabled={selectedExistingFileIds.length === 0 || loading}>
+                {loading ? 'Preparing...' : selectedExistingFileIds.length > 1 ? 'Share Selected Files' : 'Share Selected File'}
               </Button>
               {selectedExistingFile && (
                 <div className="text-sm text-slate-600 dark:text-slate-400">
-                  Selected: <span className="font-semibold text-slate-900 dark:text-white">{selectedExistingFile.originalName || selectedExistingFile.name}</span>
+                  Selected:{' '}
+                  <span className="font-semibold text-slate-900 dark:text-white">
+                    {selectedExistingFileIds.length > 1
+                      ? `${selectedExistingFileIds.length} files`
+                      : (selectedExistingFile.originalName || selectedExistingFile.name)}
+                  </span>
                 </div>
               )}
             </div>
@@ -455,20 +559,19 @@ const TransferHub = () => {
 
         {step === 3 && session && (
           <div className="grid md:grid-cols-2 gap-6 items-start">
-            <div className="space-y-3">
-              <div className="text-sm font-black uppercase tracking-wider text-slate-500">Transfer link</div>
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 break-all text-sm">
-                {transferUrl}
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 p-4">
+                <div className="text-xs font-black uppercase tracking-wider text-slate-500">Session</div>
+                <div className="mt-1 text-sm font-semibold break-all text-slate-900 dark:text-white">{session.session_id}</div>
+                <div className="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-400">
+                  <div><span className="font-bold">Expires:</span> {formatIst(session.expires_at)} (IST)</div>
+                  <div><span className="font-bold">Auto-delete:</span> {formatIst(autoDeleteAt)} (IST)</div>
+                  <div><span className="font-bold">Downloads:</span> {(session.downloads_count ?? 0)}/{(session.max_downloads ?? 1)}</div>
+                  <div><span className="font-bold">Mode:</span> {session.transfer_mode === 'existing_file' || session.transfer_mode === 'existing_files' ? 'Existing AWS file(s)' : 'Upload from device'}</div>
+                </div>
               </div>
+
               <div className="flex flex-wrap gap-3">
-                <Button
-                  variant="secondary"
-                  size="small"
-                  onClick={() => copyText(transferUrl)}
-                  className="bg-gradient-to-b from-white to-slate-100 border-slate-300 shadow-sm shadow-slate-200/60 hover:from-white hover:to-slate-200"
-                >
-                  <Copy size={16} className="mr-2" /> Copy Link
-                </Button>
                 <Button
                   variant="secondary"
                   size="small"
@@ -477,20 +580,12 @@ const TransferHub = () => {
                 >
                   End Session
                 </Button>
-                <a href={transferUrl} target="_blank" rel="noreferrer" className="inline-flex">
-                  <Button
-                    variant="secondary"
-                    size="small"
-                    className="bg-gradient-to-b from-white to-slate-100 border-slate-300 shadow-sm shadow-slate-200/60 hover:from-white hover:to-slate-200"
-                  >
-                    <LinkIcon size={16} className="mr-2" /> Open
-                  </Button>
-                </a>
               </div>
+
               <p className="text-xs text-slate-500">Recipient opens link, enters PIN, and downloads securely.</p>
-              {session.transfer_mode === 'existing_file' ? (
+              {session.transfer_mode === 'existing_file' || session.transfer_mode === 'existing_files' ? (
                 <p className="text-xs text-emerald-600 dark:text-emerald-400">
-                  This transfer uses a file already stored in AWS. The transfer session expires, but the original file stays in your library.
+                  This transfer uses file(s) already stored in AWS. The transfer session expires, but the original file(s) stay in your library.
                 </p>
               ) : (
                 <p className="text-xs text-slate-500">Auto cleanup: backend expires the session and removes the uploaded transfer object at {formatIst(autoDeleteAt)} (IST).</p>
@@ -498,21 +593,76 @@ const TransferHub = () => {
             </div>
 
             <div className="space-y-3">
-              <div className="text-sm font-black uppercase tracking-wider text-slate-500">QR code</div>
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 inline-block relative z-20 overflow-visible">
-                {session.qr_code ? (
-                  <img src={session.qr_code} alt="Transfer QR" className="w-52 h-52" />
-                ) : (
-                  <div className="w-52 h-52 flex items-center justify-center text-slate-400">
-                    <QrCode />
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 space-y-4">
+                <div>
+                  <div className="text-sm font-black uppercase tracking-wider text-slate-500">Transfer link</div>
+                  <div className="mt-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 break-all text-sm">
+                    {transferUrl}
                   </div>
-                )}
-              </div>
-              <div className="space-y-1">
-                <a href={transferUrl} className="text-sm text-sky-600 dark:text-sky-400 font-semibold inline-flex items-center gap-1">
-                  <DownloadCloud size={14} /> Receiver page
-                </a>
-                <div className="text-xs text-slate-500">{session.transfer_mode === 'existing_file' ? 'Existing file transfer' : 'Uploaded file transfer'}</div>
+                  <div className="mt-3 flex flex-wrap gap-3">
+                    <Button
+                      variant="secondary"
+                      size="small"
+                      onClick={() => copyText(transferUrl, 'Link copied to clipboard.')}
+                      className="bg-gradient-to-b from-white to-slate-100 border-slate-300 shadow-sm shadow-slate-200/60 hover:from-white hover:to-slate-200"
+                    >
+                      <Copy size={16} className="mr-2" /> Copy Link
+                    </Button>
+                    <a href={transferUrl} target="_blank" rel="noreferrer" className="inline-flex">
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        className="bg-gradient-to-b from-white to-slate-100 border-slate-300 shadow-sm shadow-slate-200/60 hover:from-white hover:to-slate-200"
+                      >
+                        <LinkIcon size={16} className="mr-2" /> Open
+                      </Button>
+                    </a>
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-4 items-start">
+                  <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 dark:bg-amber-900/10 dark:border-amber-800">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">PIN (required)</div>
+                        <div className="text-2xl md:text-3xl font-black tracking-widest text-amber-900 dark:text-amber-200 mt-1">
+                          {session.pin || '—'}
+                        </div>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        onClick={() => copyText(session.pin, 'PIN copied to clipboard.')}
+                        disabled={!session.pin}
+                        className="bg-white/70 dark:bg-slate-900 border-amber-200 dark:border-amber-800"
+                      >
+                        <Copy size={14} className="mr-1" /> Copy
+                      </Button>
+                    </div>
+                    <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">Share the PIN separately from the link/QR.</p>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-wider text-slate-500">QR code</div>
+                    <div className="mt-2 p-4 rounded-2xl bg-white border border-slate-200 inline-block relative z-20 overflow-visible">
+                      {session.qr_code ? (
+                        <img src={session.qr_code} alt="Transfer QR" className="w-44 h-44 sm:w-48 sm:h-48" />
+                      ) : (
+                        <div className="w-44 h-44 sm:w-48 sm:h-48 flex items-center justify-center text-slate-400">
+                          <QrCode />
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      <a href={transferUrl} className="text-sm text-sky-600 dark:text-sky-400 font-semibold inline-flex items-center gap-1">
+                        <DownloadCloud size={14} /> Receiver page
+                      </a>
+                      <div className="text-xs text-slate-500">
+                        {session.transfer_mode === 'existing_file' || session.transfer_mode === 'existing_files' ? 'Existing file transfer' : 'Uploaded file transfer'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -543,8 +693,8 @@ const TransferHub = () => {
               <div key={item.session_id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs font-black uppercase tracking-wider text-slate-500">Session</div>
-                  <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full ${item.transfer_mode === 'existing_file' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'}`}>
-                    {item.transfer_mode === 'existing_file' ? 'Existing file' : 'Upload'}
+                  <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full ${item.transfer_mode === 'existing_file' || item.transfer_mode === 'existing_files' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'}`}>
+                    {item.transfer_mode === 'existing_file' || item.transfer_mode === 'existing_files' ? 'Existing file' : 'Upload'}
                   </span>
                 </div>
                 <div className="text-sm font-semibold break-all text-slate-700 dark:text-slate-200">{item.session_id}</div>

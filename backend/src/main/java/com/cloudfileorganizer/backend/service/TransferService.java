@@ -18,18 +18,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.Base64;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.WriterException;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
@@ -43,6 +49,8 @@ public class TransferService {
     private static final int MAX_ALLOWED_DOWNLOADS = 10;
     private static final int MAX_ALLOWED_EXPIRY_MINUTES = 60;
     private static final String SAFE_FILENAME_PATTERN = "[^a-zA-Z0-9._-]";
+    private static final String DEFAULT_MULTI_FILE_ZIP_NAME = "shared-files.zip";
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
     private TransferSessionRepository transferSessionRepository;
@@ -101,7 +109,7 @@ public class TransferService {
     private String frontendUrls;
 
     public Map<String, Object> createSession(Integer maxDownloads, Integer expiryMinutes, String clientBaseUrl, Long createdByUserId) {
-        return createSessionInternal(maxDownloads, expiryMinutes, clientBaseUrl, createdByUserId, null, null, null);
+        return createSessionInternal(maxDownloads, expiryMinutes, clientBaseUrl, createdByUserId, null, null, null, null);
     }
 
     public Map<String, Object> createSessionFromExistingFile(String fileId, Integer maxDownloads, Integer expiryMinutes, String clientBaseUrl, Long createdByUserId) {
@@ -120,12 +128,51 @@ public class TransferService {
                 createdByUserId,
                 file.getS3Key(),
                 file.getOriginalName() != null ? file.getOriginalName() : file.getName(),
-                file.getId()
+                file.getId(),
+                null
+        );
+    }
+
+    public Map<String, Object> createSessionFromExistingFiles(List<String> fileIds, Integer maxDownloads, Integer expiryMinutes, String clientBaseUrl, Long createdByUserId) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            throw new TransferServiceException(HttpStatus.BAD_REQUEST, "file_ids is required");
+        }
+
+        List<String> normalized = fileIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .toList();
+
+        if (normalized.isEmpty()) {
+            throw new TransferServiceException(HttpStatus.BAD_REQUEST, "file_ids is required");
+        }
+
+        if (normalized.size() == 1) {
+            return createSessionFromExistingFile(normalized.get(0), maxDownloads, expiryMinutes, clientBaseUrl, createdByUserId);
+        }
+
+        for (String fileId : normalized) {
+            fileRepository.findById(fileId)
+                    .filter(existing -> existing.getUser() != null && Objects.equals(existing.getUser().getId(), createdByUserId))
+                    .orElseThrow(() -> new TransferServiceException(HttpStatus.NOT_FOUND, "File not found"));
+        }
+
+        return createSessionInternal(
+                maxDownloads,
+                expiryMinutes,
+                clientBaseUrl,
+                createdByUserId,
+                null,
+                DEFAULT_MULTI_FILE_ZIP_NAME,
+                null,
+                normalized
         );
     }
 
     private Map<String, Object> createSessionInternal(Integer maxDownloads, Integer expiryMinutes, String clientBaseUrl, Long createdByUserId,
-                                                      String fileKey, String originalFileName, String sourceFileId) {
+                                                      String fileKey, String originalFileName, String sourceFileId, List<String> sourceFileIds) {
         int safeMaxDownloads = (maxDownloads == null) ? defaultMaxDownloads : maxDownloads;
         int safeExpiryMinutes = (expiryMinutes == null) ? defaultExpiryMinutes : expiryMinutes;
 
@@ -150,7 +197,11 @@ public class TransferService {
         session.setFileKey(fileKey);
         session.setOriginalFileName(originalFileName);
         session.setSourceFileId(sourceFileId);
-        session.setStatus(fileKey == null ? TransferSessionStatus.PENDING : TransferSessionStatus.UPLOADED);
+        session.setSourceFileIds(encodeSourceFileIds(sourceFileIds));
+        boolean downloadable = (fileKey != null && !fileKey.isBlank())
+            || (sourceFileId != null && !sourceFileId.isBlank())
+            || (sourceFileIds != null && !sourceFileIds.isEmpty());
+        session.setStatus(downloadable ? TransferSessionStatus.UPLOADED : TransferSessionStatus.PENDING);
         session.setCreatedAt(LocalDateTime.now());
         session.setUpdatedAt(LocalDateTime.now());
 
@@ -163,12 +214,16 @@ public class TransferService {
         data.put("auto_delete_at", session.getExpiresAt());
         data.put("max_downloads", safeMaxDownloads);
         data.put("source_file_id", sourceFileId);
+        data.put("source_file_ids", sourceFileIds == null ? List.of() : sourceFileIds);
+        data.put("source_file_count", sourceFileIds == null ? (sourceFileId == null ? 0 : 1) : sourceFileIds.size());
         data.put("source_file_name", originalFileName);
-        data.put("transfer_mode", sourceFileId == null ? "upload" : "existing_file");
+        data.put("transfer_mode", sourceFileIds != null && !sourceFileIds.isEmpty()
+                ? "existing_files"
+                : (sourceFileId == null ? "upload" : "existing_file"));
         String transferBase = resolveTransferBaseUrl(clientBaseUrl);
         data.put("transfer_url", transferBase + "/transfer/" + sessionId);
-        if (fileKey != null && !fileKey.isBlank()) {
-            // Provide QR code immediately for sessions that already reference an existing file
+        if (downloadable) {
+            // Provide QR code immediately for sessions that already reference an existing file or files.
             data.put("qr_code", generateQrCodeDataUrl(transferBase + "/transfer/" + sessionId));
         }
         return data;
@@ -193,7 +248,10 @@ public class TransferService {
             item.put("max_downloads", session.getMaxDownloads());
             item.put("transfer_url", transferBase + "/transfer/" + session.getSessionId());
             item.put("source_file_id", session.getSourceFileId());
-            item.put("transfer_mode", session.getSourceFileId() == null ? "upload" : "existing_file");
+            List<String> sourceFileIds = decodeSourceFileIds(session.getSourceFileIds());
+            item.put("source_file_ids", sourceFileIds);
+            item.put("source_file_count", !sourceFileIds.isEmpty() ? sourceFileIds.size() : (session.getSourceFileId() == null ? 0 : 1));
+            item.put("transfer_mode", !sourceFileIds.isEmpty() ? "existing_files" : (session.getSourceFileId() == null ? "upload" : "existing_file"));
                 item.put("pin", (session.getEncryptedPin() == null || session.getEncryptedPin().isBlank())
                     ? "Unavailable"
                     : decryptPin(session.getEncryptedPin()));
@@ -224,10 +282,16 @@ public class TransferService {
         data.put("auto_delete_at", session.getExpiresAt());
         data.put("max_downloads", session.getMaxDownloads());
         data.put("downloads_count", session.getDownloadsCount());
-        data.put("has_file", session.getFileKey() != null && !session.getFileKey().isBlank());
+        List<String> sourceFileIds = decodeSourceFileIds(session.getSourceFileIds());
+        boolean hasFile = (session.getFileKey() != null && !session.getFileKey().isBlank())
+            || (session.getSourceFileId() != null && !session.getSourceFileId().isBlank())
+            || !sourceFileIds.isEmpty();
+        data.put("has_file", hasFile);
         data.put("file_name", session.getOriginalFileName());
         data.put("source_file_id", session.getSourceFileId());
-        data.put("transfer_mode", session.getSourceFileId() == null ? "upload" : "existing_file");
+        data.put("source_file_ids", sourceFileIds);
+        data.put("source_file_count", !sourceFileIds.isEmpty() ? sourceFileIds.size() : (session.getSourceFileId() == null ? 0 : 1));
+        data.put("transfer_mode", !sourceFileIds.isEmpty() ? "existing_files" : (session.getSourceFileId() == null ? "upload" : "existing_file"));
         data.put("created_at", session.getCreatedAt());
         return data;
     }
@@ -331,7 +395,9 @@ public class TransferService {
             throw new TransferServiceException(HttpStatus.GONE, "Session expired");
         }
 
-        if (session.getFileKey() == null || session.getFileKey().isBlank()) {
+        List<String> sourceFileIds = decodeSourceFileIds(session.getSourceFileIds());
+
+        if ((session.getFileKey() == null || session.getFileKey().isBlank()) && sourceFileIds.isEmpty()) {
             throw new TransferServiceException(HttpStatus.CONFLICT, "File not uploaded yet");
         }
 
@@ -355,19 +421,33 @@ public class TransferService {
             throw new TransferServiceException(HttpStatus.UNAUTHORIZED, "PIN verification required");
         }
 
-        S3Service.S3ObjectPayload objectPayload;
-        try {
-            objectPayload = s3Service.getFileWithMetadata(session.getFileKey());
-        } catch (RuntimeException ex) {
-            throw new TransferServiceException(HttpStatus.BAD_GATEWAY, "Unable to fetch file from storage");
-        }
+        InputStream stream;
+        String contentType;
+        Long contentLength;
+        String fileName;
 
-        InputStream stream = objectPayload.getStream();
-        String contentType = objectPayload.getContentType();
-        Long contentLength = objectPayload.getContentLength();
-        String fileName = (session.getOriginalFileName() == null || session.getOriginalFileName().isBlank())
-                ? extractFileNameFromKey(session.getFileKey())
-                : session.getOriginalFileName();
+        if (session.getFileKey() != null && !session.getFileKey().isBlank()) {
+            S3Service.S3ObjectPayload objectPayload;
+            try {
+                objectPayload = s3Service.getFileWithMetadata(session.getFileKey());
+            } catch (RuntimeException ex) {
+                throw new TransferServiceException(HttpStatus.BAD_GATEWAY, "Unable to fetch file from storage");
+            }
+
+            stream = objectPayload.getStream();
+            contentType = objectPayload.getContentType();
+            contentLength = objectPayload.getContentLength();
+            fileName = (session.getOriginalFileName() == null || session.getOriginalFileName().isBlank())
+                    ? extractFileNameFromKey(session.getFileKey())
+                    : session.getOriginalFileName();
+        } else {
+            stream = buildZipStream(session, sourceFileIds);
+            contentType = "application/zip";
+            contentLength = null;
+            fileName = (session.getOriginalFileName() == null || session.getOriginalFileName().isBlank())
+                    ? DEFAULT_MULTI_FILE_ZIP_NAME
+                    : session.getOriginalFileName();
+        }
 
         session.setDownloadsCount(session.getDownloadsCount() + 1);
         if (session.getDownloadsCount() >= session.getMaxDownloads()) {
@@ -459,6 +539,10 @@ public class TransferService {
         }
 
         if (session.getFileKey() == null || session.getFileKey().isBlank()) {
+            List<String> sourceFileIds = decodeSourceFileIds(session.getSourceFileIds());
+            if (!sourceFileIds.isEmpty()) {
+                throw new TransferServiceException(HttpStatus.CONFLICT, "Pre-signed download is not available for this transfer. Use stream download.");
+            }
             throw new TransferServiceException(HttpStatus.CONFLICT, "File not uploaded yet");
         }
 
@@ -567,7 +651,10 @@ public class TransferService {
             item.put("transfer_url", transferBase + "/transfer/" + session.getSessionId());
             item.put("file_name", session.getOriginalFileName());
             item.put("source_file_id", session.getSourceFileId());
-            item.put("transfer_mode", session.getSourceFileId() == null ? "upload" : "existing_file");
+            List<String> sourceFileIds = decodeSourceFileIds(session.getSourceFileIds());
+            item.put("source_file_ids", sourceFileIds);
+            item.put("source_file_count", !sourceFileIds.isEmpty() ? sourceFileIds.size() : (session.getSourceFileId() == null ? 0 : 1));
+            item.put("transfer_mode", !sourceFileIds.isEmpty() ? "existing_files" : (session.getSourceFileId() == null ? "upload" : "existing_file"));
             item.put("created_by_user_id", session.getCreatedByUserId());
             items.add(item);
         }
@@ -652,6 +739,181 @@ public class TransferService {
             sanitized = "file";
         }
         return sanitized.length() > 180 ? sanitized.substring(0, 180) : sanitized;
+    }
+
+    private String encodeSourceFileIds(List<String> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(fileIds);
+        } catch (Exception ex) {
+            // Fallback (file ids do not contain commas).
+            return String.join(",", fileIds);
+        }
+    }
+
+    private List<String> decodeSourceFileIds(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+
+        String trimmed = raw.trim();
+        try {
+            List<?> parsed = objectMapper.readValue(trimmed, List.class);
+            if (parsed == null) {
+                return List.of();
+            }
+
+            List<String> result = new ArrayList<>();
+            for (Object item : parsed) {
+                if (item == null) continue;
+                String value = String.valueOf(item).trim();
+                if (!value.isEmpty()) {
+                    result.add(value);
+                }
+            }
+            return result;
+        } catch (Exception ignored) {
+            // Backward-compatible parsing for comma-separated values.
+            String[] parts = trimmed.split(",");
+            List<String> result = new ArrayList<>();
+            for (String part : parts) {
+                if (part == null) continue;
+                String value = part.trim();
+                if (!value.isEmpty()) {
+                    result.add(value);
+                }
+            }
+            return result;
+        }
+    }
+
+    private InputStream buildZipStream(TransferSession session, List<String> sourceFileIds) {
+        if (sourceFileIds == null || sourceFileIds.isEmpty()) {
+            throw new TransferServiceException(HttpStatus.CONFLICT, "No files available for download");
+        }
+
+        List<String> normalizedIds = sourceFileIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .toList();
+
+        if (normalizedIds.isEmpty()) {
+            throw new TransferServiceException(HttpStatus.CONFLICT, "No files available for download");
+        }
+
+        // Pre-validate all requested files so we can return a clean error before streaming begins.
+        List<FileMetadata> filesToZip = new ArrayList<>();
+        for (String fileId : normalizedIds) {
+            FileMetadata file = fileRepository.findById(fileId)
+                    .filter(existing -> existing.getUser() != null && Objects.equals(existing.getUser().getId(), session.getCreatedByUserId()))
+                    .orElseThrow(() -> new TransferServiceException(HttpStatus.NOT_FOUND, "File not found"));
+
+            if (file.getS3Key() == null || file.getS3Key().isBlank()) {
+                throw new TransferServiceException(HttpStatus.BAD_GATEWAY, "Unable to fetch file from storage");
+            }
+            if (!s3Service.fileExists(file.getS3Key())) {
+                throw new TransferServiceException(HttpStatus.BAD_GATEWAY, "Unable to fetch file from storage");
+            }
+            filesToZip.add(file);
+        }
+
+        try {
+            PipedOutputStream output = new PipedOutputStream();
+            PipedInputStream input = new PipedInputStream(output, 64 * 1024);
+
+            Thread worker = new Thread(() -> {
+                try (ZipOutputStream zip = new ZipOutputStream(output)) {
+                    Map<String, Integer> seenNames = new HashMap<>();
+                    for (FileMetadata file : filesToZip) {
+                        String rawName = (file.getOriginalName() != null && !file.getOriginalName().isBlank())
+                                ? file.getOriginalName()
+                                : (file.getName() != null ? file.getName() : "file");
+                        String safeName = makeZipEntryNameUnique(sanitizeFilename(rawName), seenNames);
+
+                        boolean entryOpened = false;
+                        try {
+                            zip.putNextEntry(new ZipEntry(safeName));
+                            entryOpened = true;
+
+                            S3Service.S3ObjectPayload payload = s3Service.getFileWithMetadata(file.getS3Key());
+                            try (InputStream in = payload.getStream()) {
+                                in.transferTo(zip);
+                            }
+                        } catch (Exception ex) {
+                            try {
+                                if (entryOpened) {
+                                    zip.closeEntry();
+                                }
+                            } catch (IOException ignored) {
+                                // Ignore close failure.
+                            }
+
+                            try {
+                                String errorEntryName = makeZipEntryNameUnique("__ERROR__-" + safeName + ".txt", seenNames);
+                                zip.putNextEntry(new ZipEntry(errorEntryName));
+                                String msg = "Failed to include file '" + rawName + "' in transfer ZIP download.\nReason: " + ex.getMessage() + "\n";
+                                zip.write(msg.getBytes(StandardCharsets.UTF_8));
+                                zip.closeEntry();
+                            } catch (Exception ignored) {
+                                // best-effort
+                            }
+                            continue;
+                        }
+
+                        try {
+                            zip.closeEntry();
+                        } catch (IOException ignored) {
+                            // Ignore close failure.
+                        }
+                    }
+                } catch (Exception ex) {
+                    logger.warn("Failed streaming ZIP for transfer session {}: {}", session.getSessionId(), ex.toString());
+                    try {
+                        output.close();
+                    } catch (IOException ignored) {
+                        // Ignore close failure.
+                    }
+                }
+            }, "transfer-zip-" + session.getSessionId());
+            worker.setDaemon(true);
+            worker.start();
+
+            return input;
+        } catch (IOException ex) {
+            throw new TransferServiceException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to prepare ZIP download");
+        }
+    }
+
+    private String makeZipEntryNameUnique(String proposed, Map<String, Integer> seen) {
+        String name = (proposed == null || proposed.isBlank()) ? "file" : proposed;
+
+        int current = seen.getOrDefault(name, 0);
+        if (current == 0) {
+            seen.put(name, 1);
+            return name;
+        }
+
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && dot < name.length() - 1) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+
+        int nextIndex = current + 1;
+        String next = base + "-" + nextIndex + ext;
+        while (seen.containsKey(next)) {
+            nextIndex++;
+            next = base + "-" + nextIndex + ext;
+        }
+        seen.put(name, nextIndex);
+        seen.put(next, 1);
+        return next;
     }
 
     private boolean isExpired(TransferSession session) {

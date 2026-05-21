@@ -55,6 +55,22 @@ public class TransferController {
         try {
             requireAuthenticatedUser(user);
             String fileId = request != null && request.get("file_id") != null ? request.get("file_id").toString() : null;
+            java.util.List<String> fileIds = new java.util.ArrayList<>();
+            Object rawFileIds = request != null ? request.get("file_ids") : null;
+            if (rawFileIds instanceof java.util.List<?> list) {
+                for (Object item : list) {
+                    if (item == null) continue;
+                    String value = String.valueOf(item).trim();
+                    if (!value.isEmpty()) {
+                        fileIds.add(value);
+                    }
+                }
+            } else if (rawFileIds != null) {
+                String value = String.valueOf(rawFileIds).trim();
+                if (!value.isEmpty()) {
+                    fileIds.add(value);
+                }
+            }
             Integer maxDownloads = request != null && request.get("max_downloads") != null
                     ? toInteger(request.get("max_downloads"), "max_downloads")
                     : null;
@@ -66,12 +82,22 @@ public class TransferController {
                 servletRequest
             );
 
+            if (!fileIds.isEmpty()) {
+                return ResponseEntity.ok(success(transferService.createSessionFromExistingFiles(
+                        fileIds,
+                        maxDownloads,
+                        expiryMinutes,
+                        clientBaseUrl,
+                        user.getId()
+                )));
+            }
+
             return ResponseEntity.ok(success(transferService.createSessionFromExistingFile(
-                    fileId,
-                    maxDownloads,
-                    expiryMinutes,
-                    clientBaseUrl,
-                    user.getId()
+                fileId,
+                maxDownloads,
+                expiryMinutes,
+                clientBaseUrl,
+                user.getId()
             )));
         } catch (TransferServiceException ex) {
             return ResponseEntity.status(ex.getStatus()).body(error(ex.getMessage()));

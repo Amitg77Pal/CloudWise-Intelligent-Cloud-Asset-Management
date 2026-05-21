@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -248,6 +249,41 @@ public class FileController {
         }
     }
 
+    @PostMapping("/download-zip")
+    public ResponseEntity<?> downloadZip(@RequestBody Map<String, Object> request) {
+        try {
+            User user = getCurrentUser();
+
+            Object rawIds = request == null ? null : request.get("ids");
+            List<String> ids = fileService.normalizeIds(rawIds);
+            if (ids.isEmpty()) {
+                Map<String, String> error = new HashMap<>();
+                error.put("message", "No IDs provided");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+
+            InputStreamResource resource = new InputStreamResource(fileService.buildZipStream(ids, user));
+
+            String fileName = "my-files.zip";
+            String encoded = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("application/zip"))
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "attachment; filename=\"" + fileName + "\"; filename*=UTF-8''" + encoded)
+                    .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, HttpHeaders.CONTENT_DISPOSITION)
+                    .body(resource);
+        } catch (IllegalArgumentException e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("message", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("message", "Failed to download ZIP: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteFile(@PathVariable String id) {
         try {
@@ -317,6 +353,38 @@ public class FileController {
         } catch (Exception e) {
             Map<String, String> error = new HashMap<>();
             error.put("message", "Category update failed: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
+    @PutMapping("/bulk/category")
+    public ResponseEntity<?> updateCategoryBulk(@RequestBody Map<String, Object> request) {
+        try {
+            User user = getCurrentUser();
+            Object rawIds = request == null ? null : request.get("ids");
+            List<String> ids = fileService.normalizeIds(rawIds);
+            String newCategory = request == null || request.get("category") == null ? null : request.get("category").toString();
+
+            if (ids.isEmpty()) {
+                throw new IllegalArgumentException("No IDs provided");
+            }
+            if (newCategory == null || newCategory.trim().isEmpty()) {
+                throw new IllegalArgumentException("Category cannot be empty");
+            }
+
+            int updated = fileService.updateCategoryBulk(ids, user, newCategory);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("updated", updated);
+            response.put("category", newCategory);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("message", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("message", "Bulk category update failed: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
