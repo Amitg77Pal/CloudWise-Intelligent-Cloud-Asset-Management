@@ -40,7 +40,7 @@ Frontend (frontend/.env):
 - VITE_API_BASE_URL
 
 Production CORS example (backend):
-- Set `FRONTEND_URL=https://www.scfo.app,https://smart-cloud-iota.vercel.app`
+- Set `FRONTEND_URL=actual-frontend-url`
 
 ## Local Development
 Backend:
@@ -58,5 +58,4 @@ Admin routes are served under /admin and require the ADMIN role.
 - Use secure secrets management for API keys and database credentials.
 - Enable HTTPS in production environments.
 
-## License
-Proprietary - internal use only.
+

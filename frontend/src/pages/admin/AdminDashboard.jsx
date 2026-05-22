@@ -16,7 +16,11 @@ import {
     Settings,
     Power,
     Server,
-    XCircle
+    XCircle,
+    FileText,
+    Download,
+    Calendar,
+    ClipboardList
 } from 'lucide-react';
 import Button from '../../components/common/Button';
 import { adminService } from '../../services/adminService';
@@ -50,6 +54,21 @@ const AdminDashboard = () => {
     const [roleFilter, setRoleFilter] = useState('All');
     const [sortKey, setSortKey] = useState('storage');
 
+    // Audit report state
+    const [auditReportOpen, setAuditReportOpen] = useState(false);
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditReport, setAuditReport] = useState(null);
+    const [auditFrom, setAuditFrom] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 30);
+        return d.toISOString().split('T')[0];
+    });
+    const [auditTo, setAuditTo] = useState(() => new Date().toISOString().split('T')[0]);
+
+    // Recent audit logs
+    const [auditLogs, setAuditLogs] = useState([]);
+    const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+
     useEffect(() => {
         const fetchData = async () => {
             try {
@@ -81,7 +100,20 @@ const AdminDashboard = () => {
         };
 
         fetchData();
+        fetchAuditLogs();
     }, []);
+
+    const fetchAuditLogs = async () => {
+        try {
+            setAuditLogsLoading(true);
+            const res = await adminService.getAuditLogs();
+            setAuditLogs(res.items || []);
+        } catch (e) {
+            console.error('Failed to fetch audit logs', e);
+        } finally {
+            setAuditLogsLoading(false);
+        }
+    };
 
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
@@ -125,6 +157,7 @@ const AdminDashboard = () => {
                 status: res.active ? 'Active' : 'Disabled',
             } : u)));
             showToast({ type: 'success', message: user.active ? 'User deactivated.' : 'User reactivated.', duration: 6000 });
+            fetchAuditLogs();
         } catch (e) {
             showToast({ type: 'error', message: e?.response?.data?.message || 'Failed to update user status.', duration: 7000 });
         } finally {
@@ -148,6 +181,7 @@ const AdminDashboard = () => {
             setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, storageLimitBytes: res.storageLimitBytes } : u)));
             setPendingLimits((prev) => ({ ...prev, [user.id]: '' }));
             showToast({ type: 'success', message: 'Storage limit updated.', duration: 6000 });
+            fetchAuditLogs();
         } catch (e) {
             showToast({ type: 'error', message: e?.response?.data?.message || 'Failed to update storage limit.', duration: 7000 });
         } finally {
@@ -176,6 +210,7 @@ const AdminDashboard = () => {
                 defaultUserStorageLimitBytes: res.defaultUserStorageLimitBytes ?? null,
             });
             showToast({ type: 'success', message: 'Settings updated.', duration: 6000 });
+            fetchAuditLogs();
         } catch (e) {
             showToast({ type: 'error', message: e?.response?.data?.message || 'Failed to update settings.', duration: 7000 });
         } finally {
@@ -193,9 +228,57 @@ const AdminDashboard = () => {
             }
             setTransfers((prev) => prev.filter((item) => item.session_id !== sessionId));
             showToast({ type: 'success', message: 'Transfer session ended.', duration: 6000 });
+            fetchAuditLogs();
         } catch (e) {
             showToast({ type: 'error', message: e?.response?.data?.message || e?.message || 'Failed to end transfer session.', duration: 7000 });
         }
+    };
+
+    const handleGenerateAuditReport = async () => {
+        setAuditLoading(true);
+        try {
+            const report = await adminService.getAuditReport({ from: auditFrom, to: auditTo });
+            setAuditReport(report);
+            showToast({ type: 'success', message: 'Audit report generated.', duration: 5000 });
+        } catch (e) {
+            showToast({ type: 'error', message: e?.response?.data?.message || 'Failed to generate audit report.', duration: 7000 });
+        } finally {
+            setAuditLoading(false);
+        }
+    };
+
+    const handleDownloadCsv = () => {
+        if (!auditReport?.entries?.length) return;
+        const headers = ['Timestamp', 'Action', 'Performed By', 'Email', 'Target ID', 'Target Type', 'Details', 'IP Address'];
+        const rows = auditReport.entries.map((e) => [
+            e.timestamp || '',
+            e.action || '',
+            e.performedBy || '',
+            e.performedByEmail || '',
+            e.targetId || '',
+            e.targetType || '',
+            (e.details || '').replace(/"/g, '""'),
+            e.ipAddress || '',
+        ]);
+        const csvContent = [headers.join(','), ...rows.map((r) => r.map((v) => `"${v}"`).join(','))].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `audit-report-${auditFrom}-to-${auditTo}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    };
+
+    const getActionColor = (action) => {
+        if (!action) return 'text-slate-500 bg-slate-50 dark:bg-slate-800';
+        if (action.includes('DELETE')) return 'text-rose-600 bg-rose-50 dark:bg-rose-900/20';
+        if (action.includes('LOGIN_FAILED')) return 'text-amber-600 bg-amber-50 dark:bg-amber-900/20';
+        if (action.includes('UPLOAD') || action.includes('REGISTER')) return 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20';
+        if (action.includes('ADMIN')) return 'text-purple-600 bg-purple-50 dark:bg-purple-900/20';
+        return 'text-blue-600 bg-blue-50 dark:bg-blue-900/20';
     };
 
     if (loading) {
@@ -207,7 +290,8 @@ const AdminDashboard = () => {
     }
 
     return (
-        <div className="space-y-6 sm:space-y-8 pb-10 sm:pb-12 animate-fade-in max-w-7xl mx-auto px-2 sm:px-0">
+        <>
+            <div className="space-y-6 sm:space-y-8 pb-10 sm:pb-12 animate-fade-in max-w-7xl mx-auto px-2 sm:px-0">
             {/* Admin Header */}
             <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 lg:p-10 rounded-3xl sm:rounded-[40px] shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-6 sm:p-12 opacity-5 pointer-events-none transform translate-x-10 sm:translate-x-20 -translate-y-10 sm:-translate-y-20">
@@ -444,8 +528,13 @@ const AdminDashboard = () => {
                         <p className="text-indigo-100 text-sm font-medium mb-6 leading-relaxed">
                             Administrative access is audited. No access to private user binary data is permitted under protocol v2.4.
                         </p>
-                        <Button variant="secondary" className="w-full bg-white text-indigo-600 border-none font-black text-xs uppercase tracking-widest rounded-2xl h-12">
-                            Generate Audit Report
+                        <Button
+                            variant="secondary"
+                            className="w-full bg-white text-indigo-600 border-none font-black text-xs uppercase tracking-widest rounded-2xl h-12"
+                            onClick={() => setAuditReportOpen(!auditReportOpen)}
+                        >
+                            <FileText size={16} className="mr-2" />
+                            {auditReportOpen ? 'Close Audit Panel' : 'Generate Audit Report'}
                         </Button>
                     </div>
                 </div>
@@ -575,8 +664,176 @@ const AdminDashboard = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Recent Audit Activity */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-8 rounded-3xl sm:rounded-[40px] shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                        <ClipboardList size={18} className="text-indigo-500" />
+                        Recent Audit Activity
+                    </h3>
+                    <button
+                        onClick={fetchAuditLogs}
+                        className="text-xs font-bold text-indigo-500 hover:text-indigo-600 transition-colors"
+                    >
+                        Refresh
+                    </button>
+                </div>
+
+                {auditLogsLoading ? (
+                    <div className="text-sm text-slate-500 text-center py-4">Loading audit logs...</div>
+                ) : auditLogs.length === 0 ? (
+                    <div className="text-sm text-slate-500 text-center py-8 font-semibold">
+                        No audit events yet. Actions like login, file upload, and admin changes will appear here.
+                    </div>
+                ) : (
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {auditLogs.slice(0, 20).map((log, i) => (
+                            <div key={log.id || i} className="flex items-center gap-4 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                                <div className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase whitespace-nowrap ${getActionColor(log.action)}`}>
+                                    {log.action}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">{log.details || '—'}</div>
+                                    <div className="text-[10px] text-slate-400">{log.performedByEmail || 'System'} • {log.timestamp}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
         </div>
-    );
+
+        {/* Audit Report Panel Modal */}
+        {auditReportOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 sm:p-8 rounded-3xl sm:rounded-[40px] shadow-2xl animate-scale-up max-w-5xl w-full max-h-[90vh] overflow-y-auto relative">
+                    <button
+                        onClick={() => setAuditReportOpen(false)}
+                        className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                        title="Close"
+                    >
+                        <XCircle size={24} />
+                    </button>
+                    <div className="flex items-center justify-between mb-6 pr-8">
+                        <h3 className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                            <ClipboardList size={24} className="text-indigo-500" />
+                            Audit Report Generator
+                        </h3>
+                    </div>
+
+                    <div className="flex flex-wrap items-end gap-4 mb-6">
+                        <div>
+                            <label className="text-xs font-black uppercase tracking-widest text-slate-500 block mb-2">
+                                <Calendar size={12} className="inline mr-1" /> From
+                            </label>
+                            <input
+                                type="date"
+                                value={auditFrom}
+                                onChange={(e) => setAuditFrom(e.target.value)}
+                                className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2 text-sm font-semibold"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs font-black uppercase tracking-widest text-slate-500 block mb-2">
+                                <Calendar size={12} className="inline mr-1" /> To
+                            </label>
+                            <input
+                                type="date"
+                                value={auditTo}
+                                onChange={(e) => setAuditTo(e.target.value)}
+                                className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2 text-sm font-semibold"
+                            />
+                        </div>
+                        <Button variant="primary" onClick={handleGenerateAuditReport} disabled={auditLoading}>
+                            {auditLoading ? 'Generating...' : 'Generate Report'}
+                        </Button>
+                        {auditReport?.entries?.length > 0 && (
+                            <Button variant="secondary" onClick={handleDownloadCsv}>
+                                <Download size={14} className="mr-1" /> Export CSV
+                            </Button>
+                        )}
+                    </div>
+
+                    {auditReport && (
+                        <div className="space-y-6">
+                            {/* Report Summary */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 p-4 rounded-2xl">
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-1">Period</div>
+                                    <div className="text-sm font-bold text-slate-800 dark:text-white">{auditReport.periodFrom?.split(' ')[0]} → {auditReport.periodTo?.split(' ')[0]}</div>
+                                </div>
+                                <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 p-4 rounded-2xl">
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 mb-1">Total Events</div>
+                                    <div className="text-2xl font-black text-slate-800 dark:text-white">{auditReport.totalEvents}</div>
+                                </div>
+                                <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-4 rounded-2xl">
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-purple-500 mb-1">Unique Users</div>
+                                    <div className="text-2xl font-black text-slate-800 dark:text-white">{auditReport.uniqueUsers}</div>
+                                </div>
+                            </div>
+
+                            {/* Action Breakdown */}
+                            {auditReport.actionBreakdown?.length > 0 && (
+                                <div>
+                                    <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3 uppercase tracking-wider">Action Breakdown</h4>
+                                    <div className="flex flex-wrap gap-2">
+                                        {auditReport.actionBreakdown.map((item, i) => (
+                                            <div key={i} className={`px-3 py-2 rounded-xl text-xs font-bold ${getActionColor(item.action)}`}>
+                                                {item.action}: {item.count}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Report Entries Table */}
+                            {auditReport.entries?.length > 0 && (
+                                <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                                    <table className="w-full text-left text-xs">
+                                        <thead>
+                                            <tr className="bg-slate-50 dark:bg-slate-800/50 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                                                <th className="px-4 py-3">Timestamp</th>
+                                                <th className="px-4 py-3">Action</th>
+                                                <th className="px-4 py-3">User</th>
+                                                <th className="px-4 py-3">Target</th>
+                                                <th className="px-4 py-3">Details</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                            {auditReport.entries.slice(0, 50).map((entry, i) => (
+                                                <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/20">
+                                                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{entry.timestamp}</td>
+                                                    <td className="px-4 py-3">
+                                                        <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${getActionColor(entry.action)}`}>
+                                                            {entry.action}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-slate-700 dark:text-slate-300 font-semibold">{entry.performedByEmail || '—'}</td>
+                                                    <td className="px-4 py-3 text-slate-500 font-mono text-[10px]">{entry.targetType ? `${entry.targetType}:${entry.targetId || ''}` : '—'}</td>
+                                                    <td className="px-4 py-3 text-slate-500 max-w-xs truncate">{entry.details || '—'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    {auditReport.entries.length > 50 && (
+                                        <div className="px-4 py-3 text-xs text-slate-400 font-bold bg-slate-50 dark:bg-slate-800/50">
+                                            Showing 50 of {auditReport.entries.length} entries. Export CSV for full data.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {auditReport.entries?.length === 0 && (
+                                <div className="text-sm text-slate-500 text-center py-8 font-semibold">No audit events found for this period.</div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
+    </>
+);
 };
 
 export default AdminDashboard;

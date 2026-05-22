@@ -21,6 +21,7 @@ import com.cloudfileorganizer.backend.repository.UserRepository;
 import com.cloudfileorganizer.backend.security.JwtUtil;
 import com.cloudfileorganizer.backend.model.User;
 import com.cloudfileorganizer.backend.service.AppSettingService;
+import com.cloudfileorganizer.backend.service.AuditService;
 import com.cloudfileorganizer.backend.service.PasswordResetService;
 
 import java.util.HashMap;
@@ -42,10 +43,13 @@ public class AuthController {
     @Autowired
     private PasswordResetService passwordResetService;
 
+    @Autowired
+    private AuditService auditService;
+
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody User user) {
+    public ResponseEntity<?> register(@RequestBody User user, HttpServletRequest servletRequest) {
         try {
             // Check if email already exists
             if (userRepo.findByEmail(user.getEmail()).isPresent()) {
@@ -116,6 +120,10 @@ public class AuthController {
             
             response.put("user", userData);
 
+            auditService.log("USER_REGISTER", savedUser.getId(), savedUser.getEmail(),
+                    String.valueOf(savedUser.getId()), "USER", "New user registered",
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
+
             return ResponseEntity.ok(response);
         } catch (DataIntegrityViolationException e) {
             Map<String, String> error = new HashMap<>();
@@ -129,13 +137,16 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody User request) {
+    public ResponseEntity<?> login(@RequestBody User request, HttpServletRequest servletRequest) {
         try {
             String email = request.getEmail() == null ? null : request.getEmail().trim();
             User user = userRepo.findByEmailIgnoreCase(email)
                     .orElseThrow(() -> new RuntimeException("User not found"));
 
             if (!encoder.matches(request.getPassword(), user.getPassword())) {
+                auditService.log("USER_LOGIN_FAILED", null, request.getEmail(),
+                        null, "USER", "Failed login attempt",
+                        servletRequest != null ? servletRequest.getRemoteAddr() : null);
                 Map<String, String> error = new HashMap<>();
                 error.put("message", "Invalid credentials");
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
@@ -166,6 +177,10 @@ public class AuthController {
             userData.put("createdAt", user.getCreatedAt());
             
             response.put("user", userData);
+
+            auditService.log("USER_LOGIN", user.getId(), user.getEmail(),
+                    String.valueOf(user.getId()), "USER", "User logged in",
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
 
             return ResponseEntity.ok(response);
         } catch (RuntimeException e) {

@@ -2,6 +2,7 @@ package com.cloudfileorganizer.backend.controller;
 
 import com.cloudfileorganizer.backend.model.FileMetadata;
 import com.cloudfileorganizer.backend.model.User;
+import com.cloudfileorganizer.backend.service.AuditService;
 import com.cloudfileorganizer.backend.service.FileService;
 import com.cloudfileorganizer.backend.service.S3Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +14,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +35,9 @@ public class FileController {
     @Autowired
     private S3Service s3Service;
 
+    @Autowired
+    private AuditService auditService;
+
     private User getCurrentUser() {
         return (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
     }
@@ -38,7 +45,8 @@ public class FileController {
     @PostMapping("/upload")
     public ResponseEntity<?> uploadFile(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "category", required = false) String category) {
+            @RequestParam(value = "category", required = false) String category,
+            HttpServletRequest servletRequest) {
         
         try {
             User user = getCurrentUser();
@@ -62,6 +70,11 @@ public class FileController {
             response.put("aiSummary", fileMetadata.getAiSummary());
             response.put("aiTags", fileMetadata.getAiTags());
             response.put("aiConfidence", fileMetadata.getAiConfidence());
+
+            auditService.log("FILE_UPLOAD", user.getId(), user.getEmail(),
+                    fileMetadata.getId(), "FILE",
+                    "Uploaded file: " + fileMetadata.getOriginalName() + " (" + fileMetadata.getSize() + " bytes)",
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (IllegalArgumentException e) {
@@ -249,6 +262,9 @@ public class FileController {
         }
     }
 
+    /**
+     * Multi-file download as ZIP. Uses StreamingResponseBody to avoid PipedInputStream race conditions.
+     */
     @PostMapping("/download-zip")
     public ResponseEntity<?> downloadZip(@RequestBody Map<String, Object> request) {
         try {
@@ -262,17 +278,26 @@ public class FileController {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
             }
 
-            InputStreamResource resource = new InputStreamResource(fileService.buildZipStream(ids, user));
+            // Pre-validate all files before starting the stream
+            fileService.validateFilesForZip(ids, user);
+
+            StreamingResponseBody streamBody = outputStream -> {
+                fileService.writeZipToStream(ids, user, outputStream);
+            };
 
             String fileName = "my-files.zip";
             String encoded = java.net.URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+
+            auditService.log("FILE_BULK_DOWNLOAD", user.getId(), user.getEmail(),
+                    String.join(",", ids), "FILE",
+                    "Bulk download (ZIP) of " + ids.size() + " file(s)", null);
 
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("application/zip"))
                     .header(HttpHeaders.CONTENT_DISPOSITION,
                             "attachment; filename=\"" + fileName + "\"; filename*=UTF-8''" + encoded)
                     .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, HttpHeaders.CONTENT_DISPOSITION)
-                    .body(resource);
+                    .body(streamBody);
         } catch (IllegalArgumentException e) {
             Map<String, String> error = new HashMap<>();
             error.put("message", e.getMessage());
@@ -285,10 +310,17 @@ public class FileController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteFile(@PathVariable String id) {
+    public ResponseEntity<?> deleteFile(@PathVariable String id, HttpServletRequest servletRequest) {
         try {
             User user = getCurrentUser();
+            FileMetadata fileMetadata = fileService.getFileById(id, user).orElse(null);
+            String fileName = fileMetadata != null ? fileMetadata.getOriginalName() : id;
+
             fileService.deleteFile(id, user);
+
+            auditService.log("FILE_DELETE", user.getId(), user.getEmail(),
+                    id, "FILE", "Deleted file: " + fileName,
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
 
             Map<String, String> response = new HashMap<>();
             response.put("message", "File deleted successfully");
@@ -310,7 +342,8 @@ public class FileController {
     }
 
     @DeleteMapping("/bulk")
-    public ResponseEntity<?> deleteFilesBulk(@RequestBody Map<String, List<String>> request) {
+    public ResponseEntity<?> deleteFilesBulk(@RequestBody Map<String, List<String>> request,
+                                              HttpServletRequest servletRequest) {
         try {
             User user = getCurrentUser();
             List<String> ids = request.get("ids");
@@ -318,6 +351,12 @@ public class FileController {
                 throw new IllegalArgumentException("No IDs provided");
             }
             fileService.deleteFilesBulk(ids, user);
+
+            auditService.log("FILE_BULK_DELETE", user.getId(), user.getEmail(),
+                    String.join(",", ids), "FILE",
+                    "Bulk deleted " + ids.size() + " file(s)",
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
+
             Map<String, String> response = new HashMap<>();
             response.put("message", "Files deleted successfully");
             return ResponseEntity.ok(response);

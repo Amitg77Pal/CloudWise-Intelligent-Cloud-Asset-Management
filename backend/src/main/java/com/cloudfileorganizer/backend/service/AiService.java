@@ -58,8 +58,23 @@ public class AiService {
      */
     @Async("taskExecutor")
     public void analyzeFile(String fileId, User user) {
-        FileMetadata file = fileRepository.findByIdAndUser(fileId, user).orElse(null);
-        if (file == null) return;
+        FileMetadata file = null;
+        for (int i = 0; i < 5; i++) {
+            file = fileRepository.findByIdAndUser(fileId, user).orElse(null);
+            if (file != null) {
+                break;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (file == null) {
+            logger.warn("AI analysis failed: File with ID {} for user {} not found in database after retries.", fileId, user.getEmail());
+            return;
+        }
 
         try {
             file.setAiAnalysisStatus(AiAnalysisStatus.IN_PROGRESS);

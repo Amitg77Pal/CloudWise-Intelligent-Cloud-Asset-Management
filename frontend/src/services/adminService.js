@@ -42,4 +42,17 @@ export const adminService = {
     const response = await api.post('/api/admin/transfers/end', { session_id });
     return response.data;
   },
+
+  getAuditReport: async ({ from, to } = {}) => {
+    const params = {};
+    if (from) params.from = from;
+    if (to) params.to = to;
+    const response = await api.get('/api/admin/audit-report', { params });
+    return response.data;
+  },
+
+  getAuditLogs: async () => {
+    const response = await api.get('/api/admin/audit-logs');
+    return response.data;
+  },
 };
