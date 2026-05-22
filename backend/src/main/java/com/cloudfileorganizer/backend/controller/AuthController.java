@@ -4,6 +4,7 @@ import com.cloudfileorganizer.backend.dto.auth.ForgotPasswordRequest;
 import com.cloudfileorganizer.backend.dto.auth.ResetPasswordRequest;
 import com.cloudfileorganizer.backend.dto.auth.VerifyOtpRequest;
 import com.cloudfileorganizer.backend.dto.auth.VerifyOtpResponse;
+import com.cloudfileorganizer.backend.dto.auth.VerifyMfaRequest;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +24,7 @@ import com.cloudfileorganizer.backend.model.User;
 import com.cloudfileorganizer.backend.service.AppSettingService;
 import com.cloudfileorganizer.backend.service.AuditService;
 import com.cloudfileorganizer.backend.service.PasswordResetService;
+import com.cloudfileorganizer.backend.service.ResendEmailService;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -45,6 +47,9 @@ public class AuthController {
 
     @Autowired
     private AuditService auditService;
+
+    @Autowired
+    private ResendEmailService resendEmailService;
 
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
@@ -114,6 +119,7 @@ public class AuthController {
             userData.put("role", savedUser.getRole());
             userData.put("aiClassificationEnabled", savedUser.getAiClassificationEnabled());
             userData.put("emailNotificationsEnabled", savedUser.getEmailNotificationsEnabled());
+            userData.put("mfaEnabled", savedUser.getMfaEnabled());
             userData.put("active", savedUser.getActive());
             userData.put("storageLimitBytes", savedUser.getStorageLimitBytes());
             userData.put("createdAt", savedUser.getCreatedAt());
@@ -158,6 +164,26 @@ public class AuthController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
             }
 
+            if (Boolean.TRUE.equals(user.getMfaEnabled())) {
+                String otp = String.format("%06d", new java.util.Random().nextInt(999999));
+                user.setMfaOtp(otp);
+                user.setMfaOtpExpiresAt(java.time.LocalDateTime.now().plusMinutes(5));
+                userRepo.save(user);
+
+                resendEmailService.sendMfaOtp(user.getEmail(), otp);
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("requiresMfa", true);
+                response.put("email", user.getEmail());
+                response.put("message", "Security code sent to your email.");
+
+                auditService.log("USER_MFA_CHALLENGE", user.getId(), user.getEmail(),
+                        String.valueOf(user.getId()), "USER", "MFA challenge initiated",
+                        servletRequest != null ? servletRequest.getRemoteAddr() : null);
+
+                return ResponseEntity.accepted().body(response);
+            }
+
             // Generate JWT token
             String token = jwtUtil.generateToken(user.getEmail());
 
@@ -172,6 +198,7 @@ public class AuthController {
             userData.put("role", user.getRole());
             userData.put("aiClassificationEnabled", user.getAiClassificationEnabled());
             userData.put("emailNotificationsEnabled", user.getEmailNotificationsEnabled());
+            userData.put("mfaEnabled", user.getMfaEnabled());
             userData.put("active", user.getActive());
             userData.put("storageLimitBytes", user.getStorageLimitBytes());
             userData.put("createdAt", user.getCreatedAt());
@@ -209,6 +236,65 @@ public class AuthController {
         String requestIp = request == null ? null : request.getRemoteAddr();
         VerifyOtpResponse response = passwordResetService.verifyOtp(payload.email(), payload.otp(), requestIp);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/verify-mfa")
+    public ResponseEntity<?> verifyMfa(@Valid @RequestBody VerifyMfaRequest payload, HttpServletRequest servletRequest) {
+        try {
+            User user = userRepo.findByEmailIgnoreCase(payload.email())
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+
+            if (user.getMfaOtp() == null || !user.getMfaOtp().equals(payload.otp())) {
+                auditService.log("USER_MFA_FAILED", user.getId(), user.getEmail(),
+                        null, "USER", "Invalid MFA code",
+                        servletRequest != null ? servletRequest.getRemoteAddr() : null);
+                Map<String, String> error = new HashMap<>();
+                error.put("message", "Invalid security code.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+            }
+
+            if (user.getMfaOtpExpiresAt() == null || java.time.LocalDateTime.now().isAfter(user.getMfaOtpExpiresAt())) {
+                Map<String, String> error = new HashMap<>();
+                error.put("message", "Security code has expired. Please log in again.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+            }
+
+            // Clear OTP
+            user.setMfaOtp(null);
+            user.setMfaOtpExpiresAt(null);
+            userRepo.save(user);
+
+            // Generate JWT token
+            String token = jwtUtil.generateToken(user.getEmail());
+
+            // Create response with token and user data
+            Map<String, Object> response = new HashMap<>();
+            response.put("token", token);
+            
+            Map<String, Object> userData = new HashMap<>();
+            userData.put("id", user.getId());
+            userData.put("name", user.getName());
+            userData.put("email", user.getEmail());
+            userData.put("role", user.getRole());
+            userData.put("aiClassificationEnabled", user.getAiClassificationEnabled());
+            userData.put("emailNotificationsEnabled", user.getEmailNotificationsEnabled());
+            userData.put("mfaEnabled", user.getMfaEnabled());
+            userData.put("active", user.getActive());
+            userData.put("storageLimitBytes", user.getStorageLimitBytes());
+            userData.put("createdAt", user.getCreatedAt());
+            
+            response.put("user", userData);
+
+            auditService.log("USER_LOGIN_MFA", user.getId(), user.getEmail(),
+                    String.valueOf(user.getId()), "USER", "User logged in with MFA",
+                    servletRequest != null ? servletRequest.getRemoteAddr() : null);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("message", "MFA verification failed: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
 
     @PostMapping("/reset-password")

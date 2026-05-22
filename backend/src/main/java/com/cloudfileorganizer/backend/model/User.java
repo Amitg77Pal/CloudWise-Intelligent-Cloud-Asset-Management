@@ -42,6 +42,15 @@ public class User {
     @Column
     private LocalDateTime resetTokenExpiresAt;
 
+    @Column
+    private Boolean mfaEnabled = false;
+
+    @Column(length = 10)
+    private String mfaOtp;
+
+    @Column
+    private LocalDateTime mfaOtpExpiresAt;
+
     @Column(updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -58,6 +67,9 @@ public class User {
         }
         if (active == null) {
             active = true;
+        }
+        if (mfaEnabled == null) {
+            mfaEnabled = false;
         }
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
@@ -108,6 +120,15 @@ public class User {
 
     public LocalDateTime getResetTokenExpiresAt() { return resetTokenExpiresAt; }
     public void setResetTokenExpiresAt(LocalDateTime resetTokenExpiresAt) { this.resetTokenExpiresAt = resetTokenExpiresAt; }
+
+    public Boolean getMfaEnabled() { return mfaEnabled; }
+    public void setMfaEnabled(Boolean mfaEnabled) { this.mfaEnabled = mfaEnabled; }
+
+    public String getMfaOtp() { return mfaOtp; }
+    public void setMfaOtp(String mfaOtp) { this.mfaOtp = mfaOtp; }
+
+    public LocalDateTime getMfaOtpExpiresAt() { return mfaOtpExpiresAt; }
+    public void setMfaOtpExpiresAt(LocalDateTime mfaOtpExpiresAt) { this.mfaOtpExpiresAt = mfaOtpExpiresAt; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

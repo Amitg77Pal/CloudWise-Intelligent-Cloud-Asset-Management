@@ -8,13 +8,15 @@ import { useToast } from '../../context/ToastContext';
 
 const Login = () => {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, verifyMfa } = useAuth();
   const { showToast } = useToast();
   const [formData, setFormData] = useState({
     email: '',
     password: '',
     remember: false,
   });
+  const [requiresMfa, setRequiresMfa] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -32,9 +34,24 @@ const Login = () => {
     setError('');
     setLoading(true);
 
+    if (requiresMfa) {
+      const result = await verifyMfa(formData.email, mfaCode, { remember: formData.remember });
+      if (result.success) {
+        showToast({ type: 'success', message: 'Signed in successfully.', duration: 6000 });
+        setTimeout(() => navigate('/dashboard'), 800);
+      } else {
+        setError(result.error || 'Invalid security code.');
+      }
+      setLoading(false);
+      return;
+    }
+
     const result = await login(formData.email, formData.password, { remember: formData.remember });
 
-    if (result.success) {
+    if (result.requiresMfa) {
+      setRequiresMfa(true);
+      showToast({ type: 'info', message: 'Please check your email for the security code.', duration: 6000 });
+    } else if (result.success) {
       showToast({ type: 'success', message: 'Signed in successfully.', duration: 6000 });
       setTimeout(() => navigate('/dashboard'), 800);
     } else {
@@ -96,8 +113,12 @@ const Login = () => {
 
         <div className="w-full max-w-md">
           <div className="mb-8 text-center lg:text-left">
-            <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Welcome Back</h2>
-            <p className="text-slate-500 dark:text-slate-400">Sign in to your CloudWise account</p>
+            <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
+              {requiresMfa ? 'Security Check' : 'Welcome Back'}
+            </h2>
+            <p className="text-slate-500 dark:text-slate-400">
+              {requiresMfa ? 'Enter the 6-digit code sent to your email' : 'Sign in to your CloudWise account'}
+            </p>
           </div>
 
           {error && (
@@ -108,68 +129,93 @@ const Login = () => {
           )}
 
           <form className="space-y-5" onSubmit={handleSubmit}>
-            <div className="space-y-1.5">
-              <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  <Mail size={18} />
+            {requiresMfa ? (
+              <div className="space-y-1.5">
+                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Security Code</label>
+                <div className="relative group">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <Shield size={18} />
+                  </div>
+                  <input
+                    type="text"
+                    name="mfaCode"
+                    placeholder="123456"
+                    maxLength={6}
+                    className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white tracking-widest text-center text-lg font-bold"
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                    required
+                  />
                 </div>
-                <input
-                  type="email"
-                  name="email"
-                  placeholder="name@domain.com"
-                  className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
-                  value={formData.email}
-                  onChange={handleChange}
-                  required
-                />
               </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Password</label>
-                <Link to="/forgot-password" className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400">Forgot password?</Link>
-              </div>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                  <Lock size={18} />
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                      <Mail size={18} />
+                    </div>
+                    <input
+                      type="email"
+                      name="email"
+                      placeholder="name@domain.com"
+                      className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
+                      value={formData.email}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
                 </div>
-                <input
-                  type="password"
-                  name="password"
-                  placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
-                  value={formData.password}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-            </div>
 
-            <div className="flex items-center gap-2 pt-1 pb-2">
-              <input
-                type="checkbox"
-                id="remember"
-                name="remember"
-                checked={formData.remember}
-                onChange={handleChange}
-                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-              />
-              <label htmlFor="remember" className="text-sm text-slate-600 dark:text-slate-400 cursor-pointer">Stay signed in</label>
-            </div>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Password</label>
+                    <Link to="/forgot-password" className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400">Forgot password?</Link>
+                  </div>
+                  <div className="relative group">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                      <Lock size={18} />
+                    </div>
+                    <input
+                      type="password"
+                      name="password"
+                      placeholder="••••••••"
+                      className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
+                      value={formData.password}
+                      onChange={handleChange}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-1 pb-2">
+                  <input
+                    type="checkbox"
+                    id="remember"
+                    name="remember"
+                    checked={formData.remember}
+                    onChange={handleChange}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <label htmlFor="remember" className="text-sm text-slate-600 dark:text-slate-400 cursor-pointer">Stay signed in</label>
+                </div>
+              </>
+            )}
 
             <Button type="submit" variant="primary" loading={loading} className="w-full py-3.5 text-base font-semibold bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-500/30 transition-all">
-              Sign In
+              {requiresMfa ? 'Verify Security Code' : 'Sign In'}
             </Button>
           </form>
 
-          <p className="mt-8 text-center text-sm text-slate-600 dark:text-slate-400">
-            Don't have an account?{' '}
-            <Link to="/register" className="font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 hover:underline underline-offset-4">
-              Create one
-            </Link>
-          </p>
+          {!requiresMfa && (
+            <p className="mt-8 text-center text-sm text-slate-600 dark:text-slate-400">
+              Don't have an account?{' '}
+              <Link to="/register" className="font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 hover:underline underline-offset-4">
+                Create one
+              </Link>
+            </p>
+          )}
         </div>
       </div>
     </div>

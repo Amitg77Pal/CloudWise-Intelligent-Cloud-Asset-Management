@@ -3,13 +3,14 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Cloud, Lock, Mail, User, Shield, Zap, CheckCircle, XCircle } from 'lucide-react';
+import { Cloud, Lock, Mail, User, Shield, Zap, CheckCircle, XCircle, ShieldCheck } from 'lucide-react';
 import Button from '../../components/common/Button';
+import { authService } from '../../services/authService';
 
 const AuthPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
-    const { login, register } = useAuth();
+    const { login, register, verifyMfa, updateUser } = useAuth();
     const { showToast } = useToast();
 
     // Determine initial state from URL
@@ -27,6 +28,9 @@ const AuthPage = () => {
         password: '',
         confirmPassword: '',
     });
+    const [requiresMfa, setRequiresMfa] = useState(false);
+    const [mfaCode, setMfaCode] = useState('');
+    const [showMfaPrompt, setShowMfaPrompt] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -93,6 +97,18 @@ const AuthPage = () => {
 
         setLoading(true);
 
+        if (requiresMfa) {
+            const result = await verifyMfa(formData.email, mfaCode);
+            if (result.success) {
+                showToast({ type: 'success', message: 'Signed in successfully.', duration: 6000 });
+                navigate('/dashboard');
+            } else {
+                setError(result.error || 'Invalid security code.');
+            }
+            setLoading(false);
+            return;
+        }
+
         let result;
         if (isLogin) {
             result = await login(formData.email, formData.password);
@@ -104,10 +120,20 @@ const AuthPage = () => {
             });
         }
 
-        if (result.success) {
+        if (result.requiresMfa) {
+            setRequiresMfa(true);
+            showToast({ type: 'info', message: 'Please check your email for the security code.', duration: 6000 });
+        } else if (result.success) {
+            if (!isLogin) {
+                // Show MFA Prompt for new registrations instead of navigating immediately
+                setShowMfaPrompt(true);
+                setLoading(false);
+                return;
+            }
+            
             showToast({
                 type: 'success',
-                message: isLogin ? 'Login successful.' : 'Account created successfully.',
+                message: 'Login successful.',
                 duration: 6000
             });
             navigate('/dashboard');
@@ -118,6 +144,19 @@ const AuthPage = () => {
         }
 
         setLoading(false);
+    };
+
+    const handleEnableMfa = async () => {
+        setLoading(true);
+        try {
+            const updated = await authService.updatePreferences({ mfaEnabled: true });
+            updateUser(updated);
+            showToast({ type: 'success', message: 'Multi-Factor Authentication enabled successfully!', duration: 5000 });
+            navigate('/dashboard');
+        } catch (err) {
+            showToast({ type: 'error', message: 'Failed to enable MFA. You can try again in settings.', duration: 5000 });
+            navigate('/dashboard');
+        }
     };
 
     // Animation variants
@@ -243,7 +282,33 @@ const AuthPage = () => {
 
                     <div className="auth-form-content w-full max-w-md my-auto pb-8">
                         <AnimatePresence mode="wait">
-                            {isLogin ? (
+                            {showMfaPrompt ? (
+                                <motion.div
+                                    key="mfa-prompt"
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 1.05 }}
+                                    transition={{ duration: 0.3 }}
+                                >
+                                    <div className="text-center mb-8">
+                                        <div className="w-20 h-20 mx-auto bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mb-6">
+                                            <ShieldCheck size={40} className="text-emerald-600" />
+                                        </div>
+                                        <h2 className="text-3xl font-black text-slate-900 dark:text-white mb-4">Secure Your Account</h2>
+                                        <p className="text-slate-500 dark:text-slate-400 font-medium">
+                                            Multi-Factor Authentication (MFA) adds an extra layer of bank-grade security to your files. We strongly recommend enabling it now.
+                                        </p>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <Button onClick={handleEnableMfa} variant="primary" loading={loading} className="w-full py-4 text-base font-bold bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-lg shadow-emerald-500/30 transition-all">
+                                            Enable MFA (Recommended)
+                                        </Button>
+                                        <Button onClick={() => navigate('/dashboard')} variant="ghost" disabled={loading} className="w-full py-4 text-sm font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                                            Skip for now
+                                        </Button>
+                                    </div>
+                                </motion.div>
+                            ) : isLogin ? (
                                 <motion.div
                                     key="login-form"
                                     initial={{ opacity: 0, x: -20 }}
@@ -252,8 +317,12 @@ const AuthPage = () => {
                                     transition={{ duration: 0.3 }}
                                 >
                                     <div className="mb-8 text-center lg:text-left">
-                                        <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Welcome Back</h2>
-                                        <p className="text-slate-500 dark:text-slate-400">Sign in to your CloudWise account</p>
+                                        <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
+                                            {requiresMfa ? 'Multi-Factor Authentication' : 'Welcome Back'}
+                                        </h2>
+                                        <p className="text-slate-500 dark:text-slate-400">
+                                            {requiresMfa ? 'Enter the 6-digit code sent to your email' : 'Sign in to your CloudWise account'}
+                                        </p>
                                     </div>
 
                                     {error && (
@@ -264,67 +333,92 @@ const AuthPage = () => {
                                     )}
 
                                     <form className="space-y-5" onSubmit={handleSubmit}>
-                                        <div className="space-y-1.5">
-                                            <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
-                                            <div className="relative group">
-                                                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                                                    <Mail size={18} />
+                                        {requiresMfa ? (
+                                            <div className="space-y-1.5">
+                                                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Security Code</label>
+                                                <div className="relative group">
+                                                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                        <Shield size={18} />
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        name="mfaCode"
+                                                        placeholder="123456"
+                                                        maxLength={6}
+                                                        className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white tracking-widest text-center text-lg font-bold"
+                                                        value={mfaCode}
+                                                        onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                                                        required
+                                                    />
                                                 </div>
-                                                <input
-                                                    type="email"
-                                                    name="email"
-                                                    placeholder="name@company.com"
-                                                    className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
-                                                    value={formData.email}
-                                                    onChange={handleChange}
-                                                    required
-                                                />
                                             </div>
-                                        </div>
-
-                                        <div className="space-y-1.5">
-                                            <div className="flex justify-between items-center">
-                                                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Password</label>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => navigate('/forgot-password')}
-                                                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                                                >
-                                                    Forgot password?
-                                                </button>
-                                            </div>
-                                            <div className="relative group">
-                                                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                                                    <Lock size={18} />
+                                        ) : (
+                                            <>
+                                                <div className="space-y-1.5">
+                                                    <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
+                                                    <div className="relative group">
+                                                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                            <Mail size={18} />
+                                                        </div>
+                                                        <input
+                                                            type="email"
+                                                            name="email"
+                                                            placeholder="name@company.com"
+                                                            className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
+                                                            value={formData.email}
+                                                            onChange={handleChange}
+                                                            required
+                                                        />
+                                                    </div>
                                                 </div>
-                                                <input
-                                                    type="password"
-                                                    name="password"
-                                                    placeholder="••••••••"
-                                                    className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
-                                                    value={formData.password}
-                                                    onChange={handleChange}
-                                                    required
-                                                />
-                                            </div>
-                                        </div>
 
-                                        <div className="flex items-center gap-2 pt-1 pb-2">
-                                            <input type="checkbox" id="remember" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                                            <label htmlFor="remember" className="text-sm text-slate-600 dark:text-slate-400 cursor-pointer">Stay signed in</label>
-                                        </div>
+                                                <div className="space-y-1.5">
+                                                    <div className="flex justify-between items-center">
+                                                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Password</label>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => navigate('/forgot-password')}
+                                                            className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400"
+                                                        >
+                                                            Forgot password?
+                                                        </button>
+                                                    </div>
+                                                    <div className="relative group">
+                                                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                                                            <Lock size={18} />
+                                                        </div>
+                                                        <input
+                                                            type="password"
+                                                            name="password"
+                                                            placeholder="••••••••"
+                                                            className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-slate-900 dark:text-white"
+                                                            value={formData.password}
+                                                            onChange={handleChange}
+                                                            required
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 pt-1 pb-2">
+                                                    <input type="checkbox" id="remember" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                                    <label htmlFor="remember" className="text-sm text-slate-600 dark:text-slate-400 cursor-pointer">Stay signed in</label>
+                                                </div>
+                                            </>
+                                        )}
 
                                         <Button type="submit" variant="primary" loading={loading} className="w-full py-3.5 text-base font-semibold bg-blue-600 hover:bg-blue-700 rounded-xl shadow-lg shadow-blue-500/30 transition-all">
-                                            Sign In
+                                            {requiresMfa ? 'Verify Security Code' : 'Sign In'}
                                         </Button>
                                     </form>
 
-                                    <p className="mt-8 text-center text-sm text-slate-600 dark:text-slate-400">
-                                        Don't have an account?{' '}
-                                        <button onClick={handleToggle} type="button" className="font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 hover:underline underline-offset-4">
-                                            Create one
-                                        </button>
-                                    </p>
+                                    {!requiresMfa && (
+                                        <p className="mt-8 text-center text-sm text-slate-600 dark:text-slate-400">
+                                            Don't have an account?{' '}
+                                            <button onClick={handleToggle} type="button" className="font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 hover:underline underline-offset-4">
+                                                Create one
+                                            </button>
+                                        </p>
+                                    )}
                                 </motion.div>
                             ) : (
                                 <motion.div

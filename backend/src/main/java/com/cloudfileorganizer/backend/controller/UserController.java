@@ -45,6 +45,10 @@ public class UserController {
             dbUser.setEmailNotificationsEnabled(Boolean.parseBoolean(String.valueOf(request.get("emailNotificationsEnabled"))));
         }
 
+        if (request.containsKey("mfaEnabled")) {
+            dbUser.setMfaEnabled(Boolean.parseBoolean(String.valueOf(request.get("mfaEnabled"))));
+        }
+
         userRepository.save(dbUser);
         return ResponseEntity.ok(profileDto(dbUser));
     }
@@ -57,6 +61,7 @@ public class UserController {
         data.put("role", user.getRole());
         data.put("aiClassificationEnabled", user.getAiClassificationEnabled());
         data.put("emailNotificationsEnabled", user.getEmailNotificationsEnabled());
+        data.put("mfaEnabled", user.getMfaEnabled());
         data.put("active", user.getActive());
         data.put("storageLimitBytes", user.getStorageLimitBytes());
         data.put("createdAt", user.getCreatedAt());

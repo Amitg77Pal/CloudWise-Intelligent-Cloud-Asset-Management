@@ -53,6 +53,11 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password, options = {}) => {
     try {
       const response = await authService.login(email, password);
+      
+      if (response.requiresMfa) {
+        return { success: true, requiresMfa: true, email: response.email };
+      }
+
       const { token, user: userData } = response;
 
       if (!token || !userData) {
@@ -75,6 +80,34 @@ export const AuthProvider = ({ children }) => {
       return {
         success: false,
         error: error.response?.data?.message || error.response?.data?.error || 'Login failed. Please check your credentials.',
+      };
+    }
+  };
+
+  const verifyMfa = async (email, otp, options = {}) => {
+    try {
+      const response = await authService.verifyMfa({ email, otp });
+      const { token, user: userData } = response;
+
+      if (!token || !userData) {
+        return {
+          success: false,
+          error: 'Invalid response from server',
+        };
+      }
+
+      const remember = options.remember === true;
+      const store = remember ? localStorage : sessionStorage;
+      store.setItem('token', token);
+      store.setItem('user', JSON.stringify(userData));
+      setStorageType(remember ? 'local' : 'session');
+      setUser(userData);
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.response?.data?.message || error.response?.data?.error || 'Verification failed. Please check the code and try again.',
       };
     }
   };
@@ -122,6 +155,7 @@ export const AuthProvider = ({ children }) => {
     user,
     loading,
     login,
+    verifyMfa,
     register,
     logout,
     updateUser,

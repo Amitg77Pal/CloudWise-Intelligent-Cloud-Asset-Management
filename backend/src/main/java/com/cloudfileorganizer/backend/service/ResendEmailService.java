@@ -80,6 +80,45 @@ public class ResendEmailService {
         }
     }
 
+    public void sendMfaOtp(String toEmail, String otp) {
+        if (resendApiKey == null || resendApiKey.isBlank()) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "RESEND_API_KEY is not configured");
+        }
+
+        Map<String, Object> body = Map.of(
+                "from", resendFrom,
+                "to", List.of(toEmail),
+                "subject", "Your Login Security Code",
+                "text", "Your login security code is: " + otp + "\n\nThis code expires in 5 minutes.",
+                "html", "<p>Your login security code is: <b>" + otp + "</b></p><p>This code expires in 5 minutes. Do not share this code with anyone.</p>"
+        );
+
+        try {
+            restClient.post()
+                    .uri("https://api.resend.com/emails")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + resendApiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.debug("Sent MFA OTP email via Resend to={} from={}", toEmail, resendFrom);
+        } catch (RestClientResponseException ex) {
+            String responseBody = ex.getResponseBodyAsString();
+            log.warn(
+                    "Resend MFA email send failed: status={} to={} from={} body={}",
+                    ex.getRawStatusCode(),
+                    toEmail,
+                    resendFrom,
+                    truncate(responseBody, 500)
+            );
+
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Failed to send MFA email");
+        } catch (Exception ex) {
+            log.warn("Resend MFA email send failed (unexpected): to={} from={} error={}", toEmail, resendFrom, ex.toString());
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Failed to send MFA email");
+        }
+    }
+
     private static String truncate(String value, int maxChars) {
         if (value == null) {
             return null;

@@ -20,7 +20,8 @@ import {
   Zap,
   Lock,
   Clock3,
-  QrCode
+  QrCode,
+  Mail
 } from 'lucide-react';
 
 const Home = () => {
@@ -435,6 +436,76 @@ const Home = () => {
               <p className="text-muted-foreground font-medium leading-relaxed">
                 Search naturally or chat with AI assistant to find files instantly.
               </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* MFA Security Feature */}
+      <section className="py-20 sm:py-28 relative border-t border-border">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+            {/* Visual Side */}
+            <div className="relative order-2 lg:order-1">
+              <div className="rounded-[36px] bg-gradient-to-br from-emerald-500/10 to-teal-500/5 border border-emerald-500/20 shadow-2xl p-8 sm:p-10 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl -mr-20 -mt-20"></div>
+                
+                <div className="relative z-10 space-y-6 max-w-sm mx-auto">
+                  {/* Mockup Screen */}
+                  <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl border border-slate-200 dark:border-slate-800">
+                    <div className="flex justify-center mb-6">
+                      <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 shadow-inner">
+                        <ShieldCheck size={32} />
+                      </div>
+                    </div>
+                    <div className="text-center mb-6">
+                      <h4 className="text-lg font-black text-slate-900 dark:text-white mb-1">Multi-Factor Auth</h4>
+                      <p className="text-sm font-medium text-slate-500">Enter the 6-digit code sent to your email.</p>
+                    </div>
+                    <div className="flex justify-center gap-2 sm:gap-3 mb-8">
+                      {[1, 2, 3, 4, 5, 6].map((i) => (
+                        <div key={i} className="w-10 sm:w-12 h-12 sm:h-14 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5 flex items-center justify-center font-black text-2xl text-emerald-600">
+                          *
+                        </div>
+                      ))}
+                    </div>
+                    <div className="w-full bg-emerald-600 text-white font-bold text-center py-3.5 rounded-xl shadow-lg shadow-emerald-500/30">
+                      Verify Identity
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Content Side */}
+            <div className="space-y-6 order-1 lg:order-2">
+              <span className="text-xs font-black uppercase tracking-[0.3em] text-emerald-600 dark:text-emerald-400 block">Bank-Grade Security</span>
+              <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-foreground">
+                Bulletproof protection for your data.
+              </h2>
+              <p className="text-sm sm:text-lg text-muted-foreground font-medium leading-relaxed">
+                Take control of your account security with Multi-Factor Authentication (MFA). Enable email-based verification to ensure that only you can access your valuable files, even if your password is compromised.
+              </p>
+              <div className="flex flex-col gap-5 mt-8">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 flex-shrink-0">
+                    <Lock size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-black text-foreground">Impenetrable Access</h4>
+                    <p className="text-sm text-muted-foreground font-medium">Every login attempt requires a fresh, one-time code.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-teal-500/10 flex items-center justify-center text-teal-600 flex-shrink-0">
+                    <Mail size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-black text-foreground">Instant Delivery</h4>
+                    <p className="text-sm text-muted-foreground font-medium">Codes are securely delivered directly to your inbox instantly.</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

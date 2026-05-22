@@ -16,6 +16,7 @@ const Settings = () => {
   const [preferences, setPreferences] = useState({
     emailNotifications: user?.emailNotificationsEnabled ?? true,
     autoCategorize: user?.aiClassificationEnabled ?? true,
+    mfaEnabled: user?.mfaEnabled ?? false,
   });
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -68,6 +69,7 @@ const Settings = () => {
       const updated = await authService.updatePreferences({
         emailNotificationsEnabled: next.emailNotifications,
         aiClassificationEnabled: next.autoCategorize,
+        mfaEnabled: next.mfaEnabled,
       });
 
       updateUser(updated);
@@ -211,6 +213,22 @@ const Settings = () => {
                         type="checkbox"
                         checked={preferences.autoCategorize}
                         onChange={() => handlePreferenceChange('autoCategorize')}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 dark:after:border-slate-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between p-5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-500 hover:bg-indigo-50/20 dark:hover:bg-indigo-900/10 transition-all font-medium">
+                    <div className="flex-1">
+                      <div className="text-sm font-bold text-slate-900 dark:text-white mb-1">Multi-Factor Authentication</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Require an email security code when signing in</div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={preferences.mfaEnabled}
+                        onChange={() => handlePreferenceChange('mfaEnabled')}
                         className="sr-only peer"
                       />
                       <div className="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 dark:after:border-slate-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
